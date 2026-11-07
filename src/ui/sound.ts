@@ -1,6 +1,16 @@
 // 8-bit blips made on the fly with Web Audio (no sound files, nothing to license).
 let ctx: AudioContext | null = null;
 
+/** The page's one audio context (made on first use), or null if audio isn't available. */
+export function audio(): AudioContext | null {
+  try {
+    ctx ??= new AudioContext();
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
 export function blip(freq = 660, ms = 45, volume = 0.05) {
   try {
     ctx ??= new AudioContext();

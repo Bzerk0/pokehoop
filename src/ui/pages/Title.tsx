@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { salary, SLOTS, STARTERS } from "../../core/lineup.ts";
+import { SALARY_CAP, SALARY_MIN } from "../../core/ratingConfig.ts";
+import type { RatedPokemon } from "../../core/types.ts";
 import { BALL_SIZE, BALL_URL } from "../art/ballLogo.ts";
 import { ArcadeCabinet } from "../components/ArcadeCabinet.tsx";
 import { Menu } from "../components/Menu.tsx";
@@ -40,11 +43,18 @@ export function Title() {
   const [message, setMessage] = useState(WELCOME);
   const { data } = useRated();
 
-  // five random Pokémon on the court (UI flair only; core code never uses Math.random)
+  // five different random Pokémon on the court (UI flair; core code never uses Math.random). They're also a new
+  // player's first team, so their salaries leave room under the cap for a bench.
   const five = useMemo(() => {
     if (!data) return [];
     const small = data.filter((p) => p.spriteH <= 64 && p.spriteW <= 72);
-    return Array.from({ length: 5 }, () => small[Math.floor(Math.random() * small.length)]);
+    const roomFor = SALARY_CAP - (SLOTS.length - STARTERS) * SALARY_MIN;
+    for (let tries = 0; ; tries++) {
+      const picks = new Set<RatedPokemon>();
+      while (picks.size < STARTERS) picks.add(small[Math.floor(Math.random() * small.length)]);
+      const team = [...picks];
+      if (team.reduce((s, p) => s + salary(p), 0) <= roomFor || tries > 50) return team;
+    }
   }, [data]);
 
   useEffect(() => {
@@ -61,7 +71,7 @@ export function Title() {
   }, [stage]);
 
   const items = [
-    { label: "PLAY", note: "SOON", onSelect: () => setMessage("The court is still being built. Live games tip off in a later update!") },
+    { label: "PLAY", onSelect: () => navigate("/play", { state: { starters: five.map((p) => p.id) } }) },
     { label: "DRAFT", onSelect: () => navigate("/draft") },
     { label: "FREE BUILD", onSelect: () => navigate("/build") },
     { label: "POKéDEX", onSelect: () => navigate("/dex") },
@@ -95,7 +105,12 @@ export function Title() {
           {five.map((p, i) => (
             <div key={i} className="flex flex-col items-center" style={{ animation: `hop 0.6s steps(2) ${i * 0.12}s infinite` }}>
               <Sprite p={p} eager />
-              <div className="h-[4px] w-[32px] bg-brown" />
+              {/* a round shadow, drawn as a stepped pixel oval (no smooth curves in the pixel style) */}
+              <div className="flex flex-col items-center" aria-hidden>
+                <div className="h-[2px] w-[20px] bg-brown" />
+                <div className="h-[2px] w-[32px] bg-brown" />
+                <div className="h-[2px] w-[20px] bg-brown" />
+              </div>
             </div>
           ))}
         </div>

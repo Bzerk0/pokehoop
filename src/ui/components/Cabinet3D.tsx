@@ -58,6 +58,7 @@ const PERSPECTIVE = 1400;
 const VIEW = -12;
 const BASE_YAW = 24;
 const SWAY = 12; // degrees either side
+const SPIN_FRICTION = 0.997; // spin speed kept per millisecond after you let go (0.997 ≈ coasts about a second)
 const FILL = 0.94; // the top half fills this much of the stage's height
 export const SETTLE_MS = 700;
 
@@ -182,7 +183,7 @@ function SidePanel({ side }: { side: "left" | "right" }) {
  */
 export function Cabinet3D({ children, front, screenTop, stageH }: { children: ReactNode; front: boolean; screenTop: number; stageH: number }) {
   const rig = useRef<HTMLDivElement>(null);
-  const st = useRef({ yaw: BASE_YAW, base: BASE_YAW, pitch: VIEW, phase: 0, dragging: false, moved: 0 }).current;
+  const st = useRef({ yaw: BASE_YAW, base: BASE_YAW, pitch: VIEW, phase: 0, dragging: false, moved: 0, vel: 0 }).current;
   const shift = screenTop - SCREEN_Y;
   const cam = useRef<Framing>(null!);
   const framed = useMemo(() => framing(stageH, shift), [stageH, shift]);
@@ -192,6 +193,7 @@ export function Cabinet3D({ children, front, screenTop, stageH }: { children: Re
     const el = rig.current!;
     const reduce = reducedMotion();
     if (front) {
+      st.vel = 0;
       // after a few spins, take the short way round to face you
       const turns = Math.round(st.yaw / 360) * 360;
       st.yaw -= turns;
@@ -213,6 +215,9 @@ export function Cabinet3D({ children, front, screenTop, stageH }: { children: Re
         const dt = last ? t - last : 0;
         last = t;
         if (!st.dragging && !reduce) {
+          // inertia: a flick keeps spinning and slows down
+          st.base += st.vel * dt;
+          st.vel = Math.abs(st.vel) < 0.001 ? 0 : st.vel * SPIN_FRICTION ** dt;
           st.phase += dt / 1800;
           st.yaw = st.base + SWAY * Math.sin(st.phase);
         }
@@ -231,17 +236,23 @@ export function Cabinet3D({ children, front, screenTop, stageH }: { children: Re
     if (front) return;
     st.dragging = true;
     st.moved = 0;
-    let lx = e.clientX, ly = e.clientY;
+    st.vel = 0; // grabbing it stops a spin
+    let lx = e.clientX, ly = e.clientY, lt = e.timeStamp;
     const move = (ev: PointerEvent) => {
       const dx = ev.clientX - lx, dy = ev.clientY - ly;
+      const dt = Math.max(1, ev.timeStamp - lt);
       lx = ev.clientX;
       ly = ev.clientY;
+      lt = ev.timeStamp;
       st.moved += Math.abs(dx) + Math.abs(dy);
       st.yaw += dx * 0.4;
+      st.vel = st.vel * 0.5 + ((dx * 0.4) / dt) * 0.5; // degrees per ms, smoothed over the last few moves
       st.pitch = Math.min(5, Math.max(-40, st.pitch - dy * 0.25));
     };
-    const up = () => {
+    const up = (ev: PointerEvent) => {
       st.dragging = false;
+      if (ev.timeStamp - lt > 80) st.vel = 0; // held still before letting go: no flick
+      st.vel = Math.max(-1.5, Math.min(1.5, st.vel));
       st.base = st.yaw - SWAY * Math.sin(st.phase); // sway on from where you let go
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -346,7 +357,8 @@ export function Cabinet3D({ children, front, screenTop, stageH }: { children: Re
         </Face>
       </div>
 
-      {!front && <div className="absolute right-[10px] top-[8px] font-head text-[8px] text-steel">DRAG TO SPIN</div>}
+      {/* the stage can be wider than a phone screen: keep the hint inside the window's right edge */}
+      {!front && <div className="absolute right-[max(10px,calc(50%-50vw+10px))] top-[8px] font-head text-[8px] text-steel">DRAG TO SPIN</div>}
     </div>
   );
 }

@@ -102,6 +102,111 @@ export const CHEM = {
 };
 export const CHEM_MAX = 6;
 
+/** CPU opponents (PLAN.md §8): a team OVR band per difficulty. For each spot the CPU samples CPU_SAMPLE Pokémon who
+ *  rate near the band there and signs the one closest to its target. CPU teams ignore the salary cap. */
+export const DIFFICULTIES = [
+  { name: "ROOKIE", min: 55, max: 65, unlimitedOnly: false },
+  { name: "PRO", min: 65, max: 75, unlimitedOnly: false },
+  { name: "ALL-STAR", min: 75, max: 85, unlimitedOnly: false },
+  { name: "CHAMPION", min: 85, max: 95, unlimitedOnly: true },
+] as const;
+export const CPU_SAMPLE = 15;
+
+/** The game simulator (PLAN.md §9). Make chances are logistic around the base rates: each point the shooter's
+ *  rating beats the defender's moves the odds by 1/SLOPE in log-odds. Tuned with scripts/balance.ts. */
+export const SIM = {
+  // PLAN.md §9 says "~50 possessions" but also "average score 75–110"; 50 can't score that much, so the score wins
+  possessions: 80, // per team per game, before pace
+  paceSwing: 0.1, // ± by the two teams' average speed
+  turnover: 0.13,
+  stealShare: 0.55, // share of turnovers that are steals
+  rim: 0.6,
+  mid: 0.42,
+  three: 0.35,
+  slope: 120,
+  block: 0.07,
+  offRebound: 0.25,
+  assist: 0.6,
+  drain: 1.3, // energy lost per possession on court (less with high stamina)
+  recover: 3, // energy regained per possession on the bench
+  subBelow: 55, // a starter this tired goes to the bench if a fresher sub is there
+  tiredFloor: 0.85, // ratings at zero energy, as a share of fresh
+  quarterSec: 90, // 4 × 1:30, overtime 1:00
+  overtimeSec: 60,
+};
+
+/** The live arcade game (PLAN.md §10; Phase 5 is 1v1). Metres and seconds. The court runs up the screen and you
+ *  always attack the top hoop. Each make/miss/steal/block is a dice roll when it happens, then animated. */
+export const LIVE = {
+  targetScore: 11, // first to this wins
+  // moving
+  speedMin: 4.2, // m/s at Speed 0
+  speedMax: 7.2, // m/s at Speed 99
+  accel: 30, // m/s² toward the direction held: high = snappy
+  dribbleSlow: 0.92, // speed share with the ball
+  turboBoost: 1.35,
+  turboDrain: 0.45, // tank per second of turbo (tank is 0–1)
+  turboRegen: 0.2,
+  bump: 0.7, // players closer than this push apart
+  // shooting: hold K, release at the top of the meter
+  meterTime: 0.75, // seconds to fill the meter to the top: the perfect release
+  meterOver: 1.3, // held past this, the shot goes up late by itself
+  airballBelow: 2, // let go more than this many green-zone widths under the line: too weak, it falls short
+  windowMin: 0.07, // half-width of the green zone at rating 0 (share of the meter)
+  windowMax: 0.17, // ... at rating 99
+  perfectShare: 0.35, // the middle of the green zone that counts as PERFECT
+  contestRange: 1.6, // a defender this close contests
+  contestShrink: 0.45, // a full contest shrinks the green zone by this share
+  deepFrom: 8.5, // shots from past this are deep
+  deepShrink: 0.025, // green zone lost per metre past deepFrom
+  rimRange: 2.6, // closer than this is a finish (Finishing, not Shooting)
+  threeAt: 6.75,
+  timing: { perfect: 0.3, good: 0.12, miss: -0.25 }, // added to the base make chance (SIM rim/mid/three)
+  ratingSlope: 0.004, // make chance per rating point above 60
+  contestPenalty: 0.22, // make chance lost to a full contest
+  dunkRange: 2.4, // turbo + K this close goes to the rim
+  dunkTime: 0.45,
+  // jumping and blocking
+  gravity: 14,
+  jumpMin: 4.2, // take-off speed m/s (from Finishing + Rebounding)
+  jumpMax: 5.6,
+  reachMin: 2.0, // standing reach in metres (from height percentile)
+  reachMax: 2.9,
+  blockRange: 1.0, // hand to ball, across the floor
+  blockWindow: 0.35, // seconds after release a shot can still be blocked
+  blockBase: 0.35,
+  blockSlope: 0.006, // per point of the defender's Interior D over the shooter's rating
+  // steals and crossovers
+  stealRange: 1.4,
+  stealBase: 0.22,
+  stealSlope: 0.006, // per point of Perimeter D over Handles
+  stealCool: 0.5,
+  stumble: 0.55, // seconds frozen after a missed steal
+  crossTime: 0.3,
+  crossCool: 1.4,
+  crossBoost: 1.5,
+  ankles: 0.4, // seconds a beaten defender stumbles
+  anklesChance: 0.35, // plus 0.005 per point of Handles over Perimeter D
+  // loose balls
+  grabBase: 0.55, // grab radius in metres at Rebounding 0
+  grabSlope: 0.006,
+  deadBall: 1.0, // pause after a make before the inbound
+};
+
+/** How the CPU plays in the live game, by difficulty (PLAN.md §8). */
+export const LIVE_AI: Record<(typeof DIFFICULTIES)[number]["name"], {
+  react: number; // seconds before it sees where you moved
+  aim: number; // spread of its shot release (share of the meter)
+  steal: number; // steal tries per second when in range
+  block: number; // chance it tries to block a shot
+  pullUp: number; // open jump shots per second
+}> = {
+  ROOKIE: { react: 0.45, aim: 0.16, steal: 0.5, block: 0.35, pullUp: 0.5 },
+  PRO: { react: 0.3, aim: 0.11, steal: 0.8, block: 0.55, pullUp: 0.7 },
+  "ALL-STAR": { react: 0.2, aim: 0.07, steal: 1.1, block: 0.75, pullUp: 0.9 },
+  CHAMPION: { react: 0.12, aim: 0.04, steal: 1.4, block: 0.9, pullUp: 1.1 },
+};
+
 export const OVR_MIN = 40;
 export const OVR_MAX = 99;
 export const ATTR_MAX = 99;

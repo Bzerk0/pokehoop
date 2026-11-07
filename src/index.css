@@ -206,9 +206,42 @@ canvas {
 .oak-in {
   animation: oak-in 360ms steps(6) both;
 }
+/* the away team walks in from the right edge */
+@keyframes slide-in-right {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: none;
+  }
+}
+.slide-in-right {
+  animation: slide-in-right 360ms steps(6) both;
+}
 /* …his text box pops up once he's there; dismissed, it shrinks and he walks back off */
 .pop-late {
   animation: pop 260ms steps(4) 360ms both;
+}
+/* the YOU WIN / YOU LOSE banner after a game: pops in, then flashes like an arcade marquee and settles */
+@keyframes flash-win {
+  0%, 100% { color: var(--color-gold); text-shadow: 4px 4px 0 var(--color-red); }
+  50% { color: var(--color-white); text-shadow: 4px 4px 0 var(--color-black); }
+}
+@keyframes flash-lose {
+  0%, 100% { color: var(--color-red); text-shadow: 4px 4px 0 var(--color-black); }
+  50% { color: var(--color-white); text-shadow: 4px 4px 0 var(--color-red); }
+}
+@keyframes flash-bg {
+  50% { background-color: var(--flash); }
+}
+.flash-win {
+  animation: pop 260ms steps(4) both, flash-win 300ms steps(1) 260ms 10 both;
+}
+.flash-lose {
+  animation: pop 260ms steps(4) both, flash-lose 300ms steps(1) 260ms 10 both;
+}
+.flash-bg {
+  animation: flash-bg 300ms steps(1) 260ms 10;
 }
 @keyframes pop-out {
   0% {
@@ -239,7 +272,11 @@ canvas {
   .deal,
   .pop,
   .oak-in,
+  .slide-in-right,
   .pop-late,
+  .flash-win,
+  .flash-lose,
+  .flash-bg,
   .pop-out,
   .oak-out {
     animation: none;

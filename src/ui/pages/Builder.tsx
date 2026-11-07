@@ -26,6 +26,7 @@ import { makeRng } from "../../core/rng.ts";
 import type { RatedPokemon } from "../../core/types.ts";
 import { deleteTeam, listTeams, loadDraft, MAX_TEAMS, renameTeam, saveDraft, saveTeam, teamLineup, type SavedTeam } from "../../storage.ts";
 import { BALL_SIZE, BALL_URL } from "../art/ballLogo.ts";
+import { HomeLogo } from "../components/HomeLogo.tsx";
 import { ChemistryList } from "../components/ChemistryList.tsx";
 import { LineupCard, teamColor } from "../components/LineupCard.tsx";
 import { Modal, PlayerModal, StatsButton } from "../components/Modal.tsx";
@@ -211,7 +212,7 @@ export function Builder() {
     <div className="mx-auto flex max-w-[1200px] flex-col p-4 lg:h-full">
       <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
         <h1 className="m-0 flex items-center gap-2 font-head text-[16px] text-gold">
-          <img src={BALL_URL} width={BALL_SIZE} height={BALL_SIZE} alt="" />
+          <HomeLogo />
           FREE BUILD
         </h1>
         <button className="px-btn" onClick={() => navigate("/", { state: { menu: true } })}>

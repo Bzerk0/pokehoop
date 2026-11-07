@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { ATTRIBUTES, POSITIONS, type Attribute, type Position, type RatedPokemon } from "../../core/types.ts";
-import { BALL_SIZE, BALL_URL } from "../art/ballLogo.ts";
+import { HomeLogo } from "../components/HomeLogo.tsx";
 import { PlayerModal } from "../components/Modal.tsx";
 import { MiniCard } from "../components/PlayerCard.tsx";
 import { useRated } from "../data.ts";
@@ -87,7 +87,7 @@ export function Dex() {
     <div className="mx-auto max-w-[1200px] p-4">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="m-0 flex items-center gap-3 font-head text-[20px] text-gold" style={{ textShadow: "2px 2px 0 var(--color-red)" }}>
-          <img src={BALL_URL} width={BALL_SIZE} height={BALL_SIZE} alt="" />
+          <HomeLogo />
           POKéDEX
         </h1>
         <button className="px-btn" onClick={() => navigate("/", { state: { menu: true } })}>◀ BACK (ESC)</button>
