@@ -1,0 +1,260 @@
+@import "tailwindcss";
+@import "@fontsource/press-start-2p/400.css";
+@import "@fontsource/vt323/400.css";
+
+/* Palette only: Tailwind's default colours are cleared. Mirrors src/ui/theme/palette.ts (palette.test.ts checks). */
+@theme {
+  --color-*: initial;
+  --color-black: #0b0b14;
+  --color-night: #1a1b2e;
+  --color-navy: #24305e;
+  --color-slate: #3b4570;
+  --color-steel: #5d6b98;
+  --color-fog: #94a0c4;
+  --color-cloud: #c9d1e8;
+  --color-white: #f4f4f0;
+  --color-maroon: #5c1a2b;
+  --color-red: #c4303a;
+  --color-orange: #e8702a;
+  --color-amber: #f4a83a;
+  --color-gold: #f8d84a;
+  --color-cream: #f8eec0;
+  --color-brown: #7a4a2a;
+  --color-tan: #c08a50;
+  --color-wood: #d8a060;
+  --color-olive: #8a8a3a;
+  --color-forest: #1f5a3a;
+  --color-green: #3fa34d;
+  --color-lime: #9ad84a;
+  --color-mint: #b8f0c0;
+  --color-ocean: #1f4fa0;
+  --color-blue: #3a7ae0;
+  --color-sky: #6ab8f0;
+  --color-ice: #b0e8f8;
+  --color-teal: #2a9a9a;
+  --color-plum: #4a2a6a;
+  --color-purple: #8048c0;
+  --color-lavender: #b890e8;
+  --color-magenta: #b0337f;
+  --color-pink: #f08ab8;
+
+  --radius-*: initial;
+  --font-head: "Press Start 2P", monospace;
+  --font-body: "VT323", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--color-black);
+  color: var(--color-white);
+  font-family: var(--font-body);
+  font-size: 22px;
+  line-height: 1.15;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+img,
+canvas {
+  image-rendering: pixelated;
+}
+/* square pixel scroll bars in the palette (Chrome, Edge, Safari); Firefox gets the palette colours */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+  background: var(--color-black);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-slate);
+  border: 2px solid var(--color-black);
+  box-shadow: inset 2px 2px 0 var(--color-steel);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-steel);
+}
+::-webkit-scrollbar-corner {
+  background: var(--color-black);
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-color: var(--color-slate) var(--color-black);
+  }
+}
+:focus-visible {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 2px;
+}
+
+/* Pixel building blocks: hard borders, flat fills, 2px shadows. */
+@layer components {
+  .px-box {
+    background: var(--color-night);
+    border: 4px solid var(--color-white);
+    box-shadow: 2px 2px 0 var(--color-black);
+  }
+  .px-btn {
+    font-family: var(--font-body);
+    font-size: 24px;
+    line-height: 1;
+    text-transform: uppercase;
+    padding: 6px 12px 8px;
+    background: var(--color-navy);
+    color: var(--color-white);
+    border: 2px solid var(--color-white);
+    box-shadow: 2px 2px 0 var(--color-black);
+    cursor: pointer;
+  }
+  .px-btn:hover,
+  .px-btn[aria-pressed="true"] {
+    background: var(--color-gold);
+    color: var(--color-black);
+  }
+  .px-btn:disabled {
+    background: var(--color-night);
+    color: var(--color-steel);
+    border-color: var(--color-steel);
+    cursor: not-allowed;
+  }
+  .px-btn:active:not(:disabled) {
+    transform: translate(2px, 2px);
+    box-shadow: none;
+  }
+  .px-input {
+    font-family: var(--font-body);
+    font-size: 22px;
+    background: var(--color-black);
+    color: var(--color-white);
+    border: 2px solid var(--color-fog);
+    padding: 2px 6px;
+  }
+  .px-input:focus {
+    border-color: var(--color-gold);
+    outline: none;
+  }
+  .blink {
+    animation: blink 1s steps(1) infinite;
+  }
+}
+/* a player landing in a slot: drops in and settles, in pixel steps */
+@keyframes land {
+  0% {
+    transform: translateY(-16px);
+  }
+  70% {
+    transform: translateY(2px);
+  }
+  100% {
+    transform: none;
+  }
+}
+.land {
+  animation: land 280ms steps(5) both;
+}
+/* draft cards flip in one after another, like opening a pack */
+@keyframes deal {
+  0% {
+    transform: scaleX(0) translateY(-12px);
+  }
+  60% {
+    transform: scaleX(1.06) translateY(0);
+  }
+  100% {
+    transform: none;
+  }
+}
+.deal {
+  animation: deal 320ms steps(6) both;
+}
+/* the pick call and the grade stamp in */
+@keyframes pop {
+  0% {
+    transform: scale(0.4);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: none;
+  }
+}
+.pop {
+  animation: pop 260ms steps(4) both;
+}
+.offer {
+  transition: transform 80ms steps(2);
+}
+.offer:not(:disabled):hover,
+.offer:not(:disabled):focus-visible {
+  transform: translateY(-4px);
+}
+.offer:not(:disabled):active {
+  transform: translateY(2px);
+}
+/* the professor walks in from the left edge */
+@keyframes oak-in {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: none;
+  }
+}
+.oak-in {
+  animation: oak-in 360ms steps(6) both;
+}
+/* …his text box pops up once he's there; dismissed, it shrinks and he walks back off */
+.pop-late {
+  animation: pop 260ms steps(4) 360ms both;
+}
+@keyframes pop-out {
+  0% {
+    transform: none;
+  }
+  100% {
+    transform: scale(0);
+  }
+}
+.pop-out {
+  animation: pop-out 160ms steps(3) both;
+}
+@keyframes oak-out {
+  0%,
+  40% {
+    transform: none;
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+.oak-out {
+  animation: oak-out 480ms steps(8) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .land,
+  .blink,
+  .deal,
+  .pop,
+  .oak-in,
+  .pop-late,
+  .pop-out,
+  .oak-out {
+    animation: none;
+  }
+  .offer {
+    transition: none;
+  }
+}
+@keyframes hop {
+  50% {
+    transform: translateY(-4px);
+  }
+}
+@keyframes blink {
+  50% {
+    visibility: hidden;
+  }
+}
