@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { LIVE, LIVE_AI } from "../ratingConfig.ts";
+import { AI_STYLES, LIVE, LIVE_AI } from "../ratingConfig.ts";
 import { rateAll } from "../ratings.ts";
 import type { RatedPokemon } from "../types.ts";
-import { makeAi, makeCoach } from "./ai.ts";
+import { makeAi, makeCoach, styleOf } from "./ai.ts";
 import {
   blockChance, boxes, callPlay, passBall, callScheme, COURT, dist, energyOf, giveBall, hoopOf, keyPlayer, lineupGame, longShotFactor, makeChance, meterWindow, newGame, quickChance,
-  NO_INPUT, shotWindow, spotOf, step, timingOf, type Game, type Input,
+  NO_INPUT, shotWindow, spotOf, step, timingOf, type Game, type GameEvent, type Input,
 } from "./game.ts";
 import { canSimRest, simTheRest } from "./handover.ts";
 import { score } from "../stats.ts";
@@ -394,8 +394,15 @@ describe("plays and schemes (Phase 7)", () => {
   });
 
   it("the 2-3 zone holds its areas: off the ball, defenders stay near their spots", () => {
-    const { g, ai } = halfCourt(3, undefined, "2-3 ZONE");
-    run(g, ai, 2.5);
+    // (the first seed from 3 whose possession lasts the 2.5 s: after a turnover the zone would be on offence)
+    let g = halfCourt(3, undefined, "2-3 ZONE").g;
+    for (let seed = 3; seed < 12; seed++) {
+      const set = halfCourt(seed, undefined, "2-3 ZONE");
+      run(set.g, set.ai, 2.5);
+      g = set.g;
+      if (g.poss === 0) break;
+    }
+    expect(g.poss).toBe(0);
     const hoop = hoopOf(0);
     const off = g.players.filter((p) => p.side === 1 && dist(p, g.ball) > 3);
     for (const p of off) {
@@ -534,13 +541,16 @@ describe("the full game (Phase 8)", () => {
   }, 20_000);
 
   it("difficulty matters: a Champion-level team beats the same lineup played at Rookie level", () => {
-    let wins = 0;
-    for (let seed = 1; seed <= 6; seed++) {
+    // (measured over 20 games: Champion wins about 75%, by 3–6 points; 10 fixed seeds keep this steady)
+    let wins = 0, margin = 0;
+    for (let seed = 1; seed <= 10; seed++) {
       const { g } = fullGame(seed, 900, ["CHAMPION", "ROOKIE"], homeL); // the same five on both sides
       if (g.winner === 0) wins++;
+      margin += g.score[0] - g.score[1];
     }
-    expect(wins).toBeGreaterThanOrEqual(5);
-  }, 60_000);
+    expect(wins).toBeGreaterThanOrEqual(7);
+    expect(margin).toBeGreaterThan(0);
+  }, 120_000);
 });
 
 describe("ON FIRE (Phase 9)", () => {
@@ -781,6 +791,91 @@ describe("long shots and double jumps", () => {
     expect(g2.ball.flight?.oop).toBeFalsy();
   });
 
+  it("a quick tap right under the rim is a layup; a quick tap in your own half does nothing (holding still shoots)", () => {
+    const g = newGame([named("lucario")], [named("snorlax")], 3);
+    const me = g.players[0], hoop = hoopOf(0);
+    g.players[1].x = 1; g.players[1].y = 1;
+    me.x = hoop.x + 0.8; me.y = hoop.y - 1.2;
+    giveBall(g, 0);
+    step(g, [hold({ shoot: true }), NO_INPUT], DT);
+    step(g, [NO_INPUT, NO_INPUT], DT); // let go at once: a quick tap
+    expect(g.events.some((e) => e.kind === "release" && e.text === "LAYUP")).toBe(true);
+    // in the backcourt
+    const g2 = newGame([named("lucario")], [named("snorlax")], 3);
+    g2.players[0].y = COURT.l / 2 - 3;
+    giveBall(g2, 0);
+    step(g2, [hold({ shoot: true }), NO_INPUT], DT);
+    step(g2, [NO_INPUT, NO_INPUT], DT);
+    expect(g2.ball.holder).toBe(0); // no shot
+    expect(g2.players[0].act).toBe("free");
+    for (let i = 0; i < 60; i++) step(g2, [hold({ shoot: true }), NO_INPUT], DT); // holding winds up a real shot
+    step(g2, [NO_INPUT, NO_INPUT], DT);
+    expect(g2.ball.flight?.kind).toBe("shot");
+    // behind the arc: no quick three, just a reminder to hold it
+    const g3 = newGame([named("lucario")], [named("snorlax")], 3);
+    Object.assign(g3.players[1], { x: 1, y: 1 });
+    g3.players[0].y = hoop.y - (COURT.three + 1);
+    giveBall(g3, 0);
+    step(g3, [hold({ shoot: true }), NO_INPUT], DT);
+    step(g3, [NO_INPUT, NO_INPUT], DT);
+    expect(g3.ball.holder).toBe(0);
+    expect(g3.events.some((e) => e.text === "HOLD FOR A THREE")).toBe(true);
+  });
+
+  it("half-court 1v1: both attack the far hoop, a stop means taking it back, a make means a check at the top", () => {
+    const g = newGame([named("lucario")], [named("garchomp")], 4, { half: true });
+    expect(hoopOf(1)).toEqual(hoopOf(0)); // one hoop for both
+    const [me, them] = g.players, hoop = hoopOf(0);
+    expect(g.ball.holder).toBe(me.i); // you check it first, behind the arc
+    expect(dist(me, hoop)).toBeGreaterThan(COURT.three);
+    // they rebound (a change of hands): they must take it back before they can shoot
+    them.x = hoop.x; them.y = hoop.y - 2;
+    giveBall(g, them.i);
+    expect(g.mustClear).toBe(1);
+    step(g, [NO_INPUT, hold({ shoot: true })], DT);
+    expect(g.events.some((e) => e.text === "TAKE IT BACK!")).toBe(true);
+    expect(them.act).toBe("free");
+    them.y = hoop.y - (COURT.three + 1); // out past the arc
+    step(g, [NO_INPUT, NO_INPUT], DT);
+    expect(g.mustClear).toBeNull();
+    // after a make, the other side checks it at the top
+    g.dead = 0.001;
+    g.next = 0;
+    step(g, [NO_INPUT, NO_INPUT], DT);
+    expect(g.ball.holder).toBe(me.i);
+    expect(dist(me, hoop)).toBeGreaterThan(COURT.three);
+    expect(g.mustClear).toBeNull();
+    newGame([named("lucario")], [named("garchomp")], 4); // a normal game puts the hoops back
+    expect(hoopOf(1)).not.toEqual(hoopOf(0));
+  });
+
+  it("a CPU ball handler pinned in the corner doesn't just dribble there: it shoots or drives within a few seconds", () => {
+    let acted = 0;
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const g = newGame([named("snorlax")], [named("lucario")], seed);
+      const cpu = g.players[1], def = g.players[0], hoop = hoopOf(1);
+      cpu.x = 0.9; cpu.y = hoop.y + 4; // the corner by their hoop
+      def.x = 1.8; def.y = hoop.y + 3.2;
+      giveBall(g, cpu.i);
+      const d = makeAi(def.i, LIVE_AI.CHAMPION), o = makeAi(cpu.i, LIVE_AI.PRO, "BALANCED");
+      for (let i = 0; i < 6 * 60; i++) {
+        step(g, [d(g, DT), o(g, DT)], DT);
+        if (g.events.some((e) => e.kind === "release" && e.side === 1) || g.ball.holder !== cpu.i) {
+          acted++;
+          break;
+        }
+      }
+    }
+    expect(acted).toBe(6);
+  });
+
+  it("play styles: picked from ratings, fixed per Pokémon, and varied across the pool", () => {
+    const styles = new Set(pool.map(styleOf));
+    expect(styles.size).toBeGreaterThanOrEqual(4);
+    expect(styleOf(named("lucario"))).toBe(styleOf(named("lucario")));
+    expect(AI_STYLES["BALL HOG"].pass).toBeLessThan(AI_STYLES["PASS FIRST"].pass);
+  });
+
   it("the double jump turns you the way the stick points", () => {
     const flyer = pool.find((p) => p.types.includes("flying"))!;
     const g = newGame([named("lucario")], [flyer], 1);
@@ -793,5 +888,307 @@ describe("long shots and double jumps", () => {
     for (let i = 0; i < 5; i++) step(g, [NO_INPUT, hold({ x: -1 })], DT);
     expect(pl.vx).toBeLessThan(0);
     expect(pl.x).toBeLessThan(x0);
+  });
+});
+
+describe("1v1 pacing, screens, floaters, eurosteps and special dunks", () => {
+  const lucario = named("lucario"), snorlax = named("snorlax");
+  const five = ["lucario", "greninja", "machamp", "garchomp", "snorlax"].map(named);
+  const other5 = ["alakazam", "scizor", "infernape", "tyranitar", "metagross"].map(named);
+  /** Did `side` shoot or pass this step? */
+  const acted = (g: Game, side: 0 | 1) => g.events.some((e) => e.side === side && (e.kind === "release" || e.kind === "pass"));
+  /** Did `side` go for a steal this step? */
+  const reached = (g: Game, side: 0 | 1) => g.events.some((e) => e.side === side && (e.kind === "steal" || e.kind === "whiff"));
+  /** How often each event text comes up in CPU-vs-CPU games of `size` a side (and steps with someone screening). */
+  function cpuEvents(size: 1 | 5, seeds: number[], sec: number, style?: "AGGRESSIVE") {
+    const seen: Record<string, number> = {};
+    for (const seed of seeds) {
+      const g = size === 1 ? newGame([pool[(seed * 97) % pool.length]], [pool[(seed * 31) % pool.length]], seed) : newGame(five, other5, seed);
+      const ai = g.players.map((p) => makeAi(p.i, LIVE_AI.PRO, style));
+      for (let i = 0; i < sec * 60 && !g.over; i++) {
+        step(g, g.players.map((p) => ai[p.i](g, DT)), DT);
+        for (const e of g.events) seen[e.text] = (seen[e.text] ?? 0) + 1;
+        if (g.players.some((p) => p.screening)) seen.screening = (seen.screening ?? 0) + 1;
+      }
+    }
+    return seen;
+  }
+
+  it("half-court: the CPU holds a beat after taking it back, and after a check at the top", () => {
+    const g = newGame([snorlax], [lucario], 2, { half: true });
+    const [me, cpu] = g.players, hoop = hoopOf(1);
+    const ai = makeAi(cpu.i, LIVE_AI.PRO);
+    Object.assign(me, { x: 1, y: 1 }); // out of the way
+    Object.assign(cpu, { x: hoop.x, y: hoop.y - 2 });
+    giveBall(g, cpu.i); // a rebound: it has to take it back first
+    for (let i = 0; i < 600 && g.mustClear === 1; i++) step(g, [NO_INPUT, ai(g, DT)], DT);
+    expect(g.mustClear).toBeNull();
+    const beat = () => {
+      const start = g.time;
+      let busy = false;
+      while (g.time - start < LIVE.halfPause - 0.05) {
+        step(g, [NO_INPUT, ai(g, DT)], DT);
+        if (acted(g, 1)) busy = true;
+      }
+      expect(busy).toBe(false);
+      expect(Math.hypot(cpu.vx, cpu.vy)).toBeLessThan(0.3); // a stationary dribble
+      let went = false; // then it goes (or shoots)
+      for (let i = 0; i < 90 && !went; i++) {
+        step(g, [NO_INPUT, ai(g, DT)], DT);
+        went = acted(g, 1) || Math.hypot(cpu.vx, cpu.vy) > 1.5;
+      }
+      expect(went).toBe(true);
+    };
+    beat();
+    g.dead = 0.001; // a make: it checks the ball at the top
+    g.next = 1;
+    step(g, [NO_INPUT, ai(g, DT)], DT);
+    expect(g.ball.holder).toBe(cpu.i);
+    beat();
+  });
+
+  it("1v1: most CPU defenders pick you up loose in your backcourt and don't reach; AGGRESSIVE ones press", () => {
+    const run = (style: "BALANCED" | "AGGRESSIVE", seed: number) => {
+      const g = newGame([lucario], [named("garchomp")], seed); // you start with it under your own hoop
+      const def = makeAi(1, LIVE_AI.CHAMPION, style);
+      let tries = 0, gap = Infinity;
+      for (let i = 0; i < 4 * 60; i++) {
+        step(g, [NO_INPUT, def(g, DT)], DT);
+        if (reached(g, 1)) tries++;
+        if (i > 120) gap = Math.min(gap, dist(g.players[0], g.players[1]));
+      }
+      return { tries, gap };
+    };
+    for (const seed of [1, 2, 3]) {
+      const calm = run("BALANCED", seed);
+      expect(calm.tries).toBe(0);
+      expect(calm.gap).toBeGreaterThan(2);
+    }
+    expect([1, 2, 3].reduce((n, seed) => n + run("AGGRESSIVE", seed).tries, 0)).toBeGreaterThan(0);
+  });
+
+  it("1v1: a whiffed steal out in the handler's backcourt stumbles longer than one over half court", () => {
+    const g = newGame([lucario], [snorlax], 3); // you're in your backcourt
+    g.players[1].x = 1; // nowhere near: a whiff
+    step(g, [NO_INPUT, hold({ steal: true })], DT);
+    expect(g.players[1].actT).toBeCloseTo(LIVE.stumble * LIVE.pressWhiff, 5);
+    const g2 = newGame([lucario], [snorlax], 3);
+    g2.players[0].y = hoopOf(0).y - 5; // over half court
+    g2.players[1].x = 1;
+    step(g2, [NO_INPUT, hold({ steal: true })], DT);
+    expect(g2.players[1].actT).toBeCloseTo(LIVE.stumble, 5);
+  });
+
+  it("1v1: the CPU gives you a moment with the ball before it reaches", () => {
+    let early = 0, later = 0;
+    for (let seed = 1; seed <= 6; seed++) {
+      const g = newGame([snorlax], [lucario], seed);
+      const [me, cpu] = g.players;
+      Object.assign(me, { x: COURT.w / 2, y: hoopOf(0).y - 6 }); // over half court
+      Object.assign(cpu, { x: me.x, y: me.y + 1.2 });
+      giveBall(g, me.i);
+      const ai = makeAi(cpu.i, LIVE_AI.CHAMPION, "AGGRESSIVE");
+      for (let i = 0; i < 180; i++) {
+        step(g, [NO_INPUT, ai(g, DT)], DT);
+        if (!reached(g, 1)) continue;
+        if (g.time < LIVE.stealGrace) early++;
+        else later++;
+        break;
+      }
+    }
+    expect(early).toBe(0);
+    expect(later).toBeGreaterThan(0);
+  });
+
+  it("planting a screen stops you even with the stick held; the event names the screener and the defender held", () => {
+    const g = newGame(five, other5, 1);
+    const scr = g.players[4], def = g.players[5];
+    g.control = 4; // you
+    Object.assign(scr, { x: 7, y: 15, vx: 0, vy: 5 });
+    Object.assign(def, { x: 7, y: 12.5 });
+    let ev: GameEvent | undefined;
+    for (let i = 0; i < 60; i++) {
+      step(g, g.players.map((p) => (p === scr ? hold({ screen: true, y: 1 }) : p === def ? hold({ y: 1 }) : NO_INPUT)), DT);
+      if (i === 20) {
+        expect(Math.hypot(scr.vx, scr.vy)).toBeLessThan(0.1);
+        expect(scr.screening).toBe(true);
+      }
+      ev ??= g.events.find((e) => e.kind === "screen");
+    }
+    expect(ev?.who).toBe(scr.i);
+    expect(ev?.vs).toBe(def.i);
+  });
+
+  it("CPU teammates come up to screen for you outside plays, then roll to the rim; CPU teams do it too", () => {
+    let screened = 0, rolled = 0;
+    for (const seed of [1, 2, 3]) {
+      const g = newGame(five, other5, seed);
+      for (const p of g.players) if (p.side === 0) Object.assign(p, spotOf(0, p.slot, 5));
+      for (const p of g.players) if (p.side === 1) Object.assign(p, { x: 0.5, y: 2 + p.slot }); // defence asleep
+      const ai = g.players.map((p) => makeAi(p.i, LIVE_AI.PRO));
+      let who: number | null = null;
+      for (let i = 0; i < 60 * 18; i++) {
+        step(g, g.players.map((p) => (p.side === 0 && p.i !== 0 ? ai[p.i](g, DT) : NO_INPUT)), DT); // you stand at the top
+        const s = g.players.find((p) => p.side === 0 && p.screening);
+        if (s && who == null) who = s.i;
+        if (who != null && !g.players[who].screening && dist(g.players[who], hoopOf(0)) < 3) {
+          rolled++;
+          break;
+        }
+      }
+      if (who != null) screened++;
+    }
+    expect(screened).toBeGreaterThan(0);
+    expect(rolled).toBeGreaterThan(0);
+    const seen = cpuEvents(5, [1], 120); // CPU vs CPU, no coach (so no plays)
+    expect(seen.screening ?? 0).toBeGreaterThan(0);
+  });
+
+  it("a CPU ball handler drives off a teammate's planted screen", () => {
+    const g = newGame(five, other5, 2);
+    const hh = g.players[5], scr = g.players[9], def = g.players[0], hoop = hoopOf(1);
+    for (const p of g.players) Object.assign(p, { x: 0.5, y: COURT.l / 2 }); // everyone else out of it
+    Object.assign(hh, { x: COURT.w / 2, y: hoop.y + 7.6 * COURT.scale });
+    Object.assign(def, { x: hh.x, y: hh.y - 1.3 }); // right in his way (alone, he'd slip round him to the left)
+    Object.assign(scr, { x: hh.x + 1, y: hh.y - 1 }); // planted on his right
+    giveBall(g, hh.i);
+    const ai = makeAi(hh.i, LIVE_AI.PRO);
+    for (let i = 0; i < 10; i++) step(g, g.players.map((p) => (p === hh ? ai(g, DT) : p === scr ? hold({ screen: true }) : NO_INPUT)), DT);
+    expect(scr.screening).toBe(true);
+    expect(hh.vx).toBeGreaterThan(0.5); // round the screener's side
+  });
+
+  it("a quick tap on the drive a few metres out is a floater: high and soft, and a contest bothers it half as much", () => {
+    const tap = (seed: number, moving: boolean, guarded: boolean) => {
+      const g = newGame([lucario], [snorlax], seed);
+      const [me, def] = g.players, hoop = hoopOf(0);
+      Object.assign(me, { x: hoop.x, y: hoop.y - 3.6, vx: 0, vy: moving ? 5 : 0 });
+      Object.assign(def, guarded ? { x: hoop.x, y: hoop.y - 2.6 } : { x: 1, y: 1 });
+      giveBall(g, 0);
+      step(g, [hold({ shoot: true, y: moving ? 1 : 0 }), NO_INPUT], DT);
+      step(g, [hold({ y: moving ? 1 : 0 }), NO_INPUT], DT); // let go at once
+      return g;
+    };
+    const g = tap(1, true, false), e = g.events.find((e) => e.kind === "release");
+    expect(e?.text).toBe("FLOATER");
+    expect(e?.who).toBe(0);
+    expect(g.ball.flight?.peak).toBeCloseTo(COURT.rimZ + 2.3, 5);
+    expect(g.ball.flight?.dur).toBeCloseTo(0.8, 5);
+    expect(tap(1, false, false).events.find((e) => e.kind === "release")?.text).toBe("QUICK"); // standing still: a plain quick shot
+    let floaters = 0, quick = 0;
+    for (let s = 0; s < 300; s++) {
+      if (tap(s, true, true).lastShot?.made) floaters++;
+      if (tap(s, false, true).lastShot?.made) quick++;
+    }
+    expect(floaters).toBeGreaterThan(quick + 15); // over the man in front
+  });
+
+  it("the crossover on a drive near the rim is a eurostep: out to one side, back across, still going, the man in front caught leaning", () => {
+    const g = newGame([lucario], [snorlax], 1);
+    const [me, def] = g.players, hoop = hoopOf(0);
+    Object.assign(me, { x: hoop.x, y: hoop.y - 4.5, vx: 0, vy: 5 });
+    Object.assign(def, { x: hoop.x + 0.2, y: hoop.y - 3.2 });
+    giveBall(g, 0);
+    step(g, [hold({ y: 1, cross: true }), NO_INPUT], DT);
+    const e = g.events.find((e) => e.text === "EUROSTEP");
+    expect(e?.who).toBe(0);
+    expect(e?.vs).toBe(1);
+    expect(def.slow).toBeGreaterThan(0);
+    const x0 = me.x, y0 = me.y, xs: number[] = [];
+    for (let i = 0; i < Math.round(LIVE.euroTime * 60); i++) {
+      step(g, [hold({ y: 1 }), NO_INPUT], DT);
+      xs.push(me.x - x0);
+    }
+    const out = xs[Math.floor(xs.length / 2)];
+    expect(Math.abs(out)).toBeGreaterThan(0.5); // out to one side…
+    expect(Math.abs(xs[xs.length - 1])).toBeLessThan(Math.abs(out) - 0.4); // …and back across
+    expect(me.y).toBeGreaterThan(y0 + 1); // still going at the rim
+    // and it finishes itself: a layup (or a floater if it's still a way out), no button needed
+    let finished = "";
+    for (let i = 0; i < 10 && !finished; i++) {
+      step(g, [hold({ y: 1 }), NO_INPUT], DT);
+      finished = g.events.find((e) => e.kind === "release" && (e.text === "LAYUP" || e.text === "FLOATER"))?.text ?? "";
+    }
+    expect(finished).not.toBe("");
+    expect(g.ball.flight?.kind).toBe("shot");
+    // further out it's a plain crossover
+    const g2 = newGame([lucario], [snorlax], 1);
+    Object.assign(g2.players[0], { x: hoop.x, y: hoop.y - 9, vx: 0, vy: 5 });
+    step(g2, [hold({ y: 1, cross: true }), NO_INPUT], DT);
+    expect(g2.events.some((e) => e.text === "EUROSTEP")).toBe(false);
+    expect(g2.players[0].act).toBe("cross");
+  });
+
+  it("in a team game a smothered eurostep is sometimes dished to the open man; an open one never is", () => {
+    const team = (a: string, b: string, c: string) => [named(a), named(b), named(c)];
+    const finishes = (smother: boolean, seed: number) => {
+      const g = newGame(team("lucario", "pikachu", "eevee"), team("snorlax", "machamp", "onix"), seed);
+      const me = g.players[0], hoop = hoopOf(0);
+      for (const p of g.players) Object.assign(p, { x: p.side ? 1 : COURT.w - 1, y: hoop.y - 8, vx: 0, vy: 0 }); // everyone out of the way
+      Object.assign(me, { x: hoop.x, y: hoop.y - 4.5, vx: 0, vy: 5 });
+      giveBall(g, 0);
+      step(g, g.players.map((p) => (p.i === 0 ? hold({ y: 1, cross: true }) : NO_INPUT)), DT);
+      for (let i = 0; i < 90; i++) {
+        const d = g.players.find((p) => p.side === 1)!; // a big right in his face as he finishes
+        if (smother) Object.assign(d, { x: me.x, y: me.y + 0.5, vx: 0, vy: 0 });
+        step(g, g.players.map((p) => (p.i === 0 ? hold({ y: 1 }) : NO_INPUT)), DT);
+        const e = g.events.find((e) => e.text === "DISH!" || (e.kind === "release" && (e.text === "LAYUP" || e.text === "FLOATER")));
+        if (e) return e.text;
+      }
+      return "none";
+    };
+    const tight = Array.from({ length: 30 }, (_, s) => finishes(true, s + 1));
+    const open = Array.from({ length: 15 }, (_, s) => finishes(false, s + 1));
+    expect(tight.filter((t) => t === "DISH!").length).toBeGreaterThan(5);
+    expect(tight.some((t) => t !== "DISH!")).toBe(true); // not every time
+    expect(open.includes("DISH!")).toBe(false);
+    expect(open.includes("none")).toBe(false);
+  });
+
+  it("the CPU throws floaters and eurosteps on its drives (drive-heavy styles most)", () => {
+    const seen = cpuEvents(1, [1, 2, 3, 4, 5, 6, 7, 8], 300, "AGGRESSIVE");
+    expect(seen.FLOATER ?? 0).toBeGreaterThan(0);
+    expect(seen.EUROSTEP ?? 0).toBeGreaterThan(0);
+  });
+
+  it("special dunks are rare: likelier on fire, or all alone for a big finisher; the release still says DUNK", () => {
+    const dunks = (setup: (g: Game) => void) => {
+      let special = 0;
+      const texts = new Set<string>();
+      for (let seed = 0; seed < 200; seed++) {
+        const g = newGame([lucario], [snorlax], seed); // Lucario: Finishing 80+
+        const [me, def] = g.players, hoop = hoopOf(0);
+        Object.assign(me, { x: hoop.x, y: hoop.y - 1.5 });
+        Object.assign(def, { x: 1, y: 1 });
+        setup(g);
+        giveBall(g, 0);
+        step(g, [hold({ turbo: true, shoot: true }), NO_INPUT], DT);
+        expect(me.act).toBe("dunk");
+        if (me.dunkStyle) {
+          special++;
+          const ev = g.events.find((e) => e.kind === "move");
+          expect(ev?.who).toBe(0);
+          texts.add(ev!.text);
+        }
+        let release = "";
+        for (let i = 0; i < 120 && !(me.act === "free" && me.z === 0); i++) {
+          step(g, [NO_INPUT, NO_INPUT], DT);
+          release ||= g.events.find((e) => e.kind === "release")?.text ?? "";
+        }
+        expect(release).toBe("DUNK");
+        expect(me.dunkStyle).toBeNull(); // cleared on landing
+      }
+      return { share: special / 200, texts };
+    };
+    const fire = dunks((g) => (g.players[0].onFire = true));
+    const alone = dunks(() => {});
+    const crowded = dunks((g) => Object.assign(g.players[1], { x: hoopOf(0).x + 1.5, y: hoopOf(0).y - 2.5 }));
+    expect(fire.share).toBeGreaterThan(0.22);
+    expect(fire.share).toBeLessThan(0.5);
+    expect(alone.share).toBeGreaterThan(0.06);
+    expect(alone.share).toBeLessThan(0.26);
+    expect(crowded.share).toBeLessThan(0.07);
+    expect(fire.texts.size).toBeGreaterThanOrEqual(3);
+    for (const t of fire.texts) expect(["360 DUNK!", "WINDMILL!", "TOMAHAWK!", "EASTBAY!"]).toContain(t);
   });
 });

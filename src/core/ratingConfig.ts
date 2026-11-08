@@ -64,17 +64,30 @@ export const SALARY_MIN = 1;
 export const SALARY_MAX = 40;
 export const SALARY_CURVE = 3;
 
-/** The draft: one round per slot (PG, SG, SF, PF, C, then 3 bench), DRAFT_OFFERS Pokémon offered each round,
- *  one from each tier (best position OVR, high to low). Each tier's offer is drawn from the DRAFT_DEPTH players in
- *  it who are best at the slot being picked. */
+/** The draft tiers (best position OVR, high to low). Each offer in a tier is drawn from the DRAFT_DEPTH best free,
+ *  affordable players in it. */
 export const DRAFT_TIERS = [
   { name: "STAR", min: 90 },
   { name: "STARTER", min: 78 },
   { name: "ROLE", min: 64 },
   { name: "SLEEPER", min: 0 },
 ] as const;
-export const DRAFT_OFFERS = 4;
+/** The ARCADE DRAFT's slot machine: each pull spins `reels` reels, each landing on a tier drawn by `weights` (higher
+ *  = more often, so keep the better tiers rarer). After the pull, if no STAR landed, one reel is swapped for a STAR
+ *  with chance `starChance` (`firstStar` on the very first pull). The dev menu (` on the draft page) edits these. */
+export const ARCADE = {
+  reels: 3,
+  weights: { STAR: 1, STARTER: 3, ROLE: 6, SLEEPER: 5 },
+  starChance: 0.9,
+  firstStar: 1,
+  /** Contract prices (lineup.ts salary): each Pokémon's price is its rating's price ± up to `vary` (0.12 = 12%), a
+   *  fixed tweak per Pokémon from `seed`. `perDraft` 1 = a new seed (new tweaks) at the start of every draft. */
+  price: { vary: 0.12, perDraft: 0, seed: 0 },
+};
 export const DRAFT_REROLLS = 2;
+/** The FULL DRAFT (fullDraft.ts): teams in the draft, the class size (× the picks there are), its ratings' bell curve
+ *  (best-position OVR mean and spread), and how much the CPU teams' boards disagree (± OVR). */
+export const FULL = { teams: 8, classSize: 1.5, mean: 70, sd: 10, cpuNoise: 3 };
 export const DRAFT_DEPTH = 40;
 /** Unrounded team rating (chemistry included) needed for each draft grade, best first. Calibrated by simulating
  *  600 drafts per strategy with free placement: random picks on random spots land around 68.7 (D), always taking
@@ -173,12 +186,23 @@ export const LIVE = {
   replays: 1, // 1 = instant replays on, 0 = off (the top plays reel still runs)
   liveCine: 1, // 1 = live cinematic cuts (dunks, alley-oops, blocks, corner threes), 0 = off
   cineGap: 2, // game seconds after one live cut before the next can start
+  cineHold: 0.5, // seconds a live dunk cut stays on after the dunker lands
+  oopCut: 0.35, // seconds before the catch an alley-oop's live cut starts (the lob itself stays in the normal view)
+  cornerEase: 1.4, // seconds a corner three's live cut takes to speed up from full slow-mo to normal
+  /** Which live cuts play (1 = on, 0 = off), each on its own (the dev menu's LIVE CINE SHOTS). */
+  cineShots: { dunk: 1, special: 1, oop: 1, block: 1, corner: 1, eurostep: 1, floater: 1 },
   replayMin: 3, // hype a play needs for an instant replay
   replayGap: 30, // game seconds between instant replays
   replaySlow: 0.25, // slow-motion speed at the key moment
   replaySlowSpan: 0.3, // seconds either side of the key moment at full slow-mo (it eases back over the same again)
   topPlays: 3, // plays in the end-of-game reel
-  replayHype: { oop: 4.5, dunk: 3, stepback: 3, ankles: 3, block: 3, chase: 4, buzzer: 3 }, // buzzer: added to whatever it was
+  replayHype: {
+    oop: 4.5, dunk: 3, stepback: 3, ankles: 3, block: 3, chase: 4, buzzer: 3, // buzzer: added to whatever it was
+    special: 5.5, eurostep: 3, floater: 2.5, screen: 2, perimeter: 1, perimeterThree: 2, // perimeterThree: added when the swing ends in a three
+  },
+  perimeterPasses: 3, // passes in a row round the arc (both ends outside the three-point line) that make a ball-movement clip
+  perimeterWindow: 4.5, // ...within this many seconds
+  specialSlow: 1.8, // × the slow-motion span for a special dunk (360, windmill...)
   sidePlays: 6, // seconds the one-character mode's side play list shows at the start of a possession // game speed while the play / scheme menu is open
   // the full game (Phase 8): 4 × 1:30 running clock, 1:00 overtimes (SIM.quarterSec / SIM.overtimeSec)
   periodBreak: 2.5, // seconds between periods
@@ -227,6 +251,8 @@ export const LIVE = {
   contestPenalty: 0.22, // make chance lost to a full contest
   dunkRange: 2.4, // turbo + K this close goes to the rim
   dunkTime: 0.45,
+  layupRange: 2.2, // metres from the rim: a quick tap this close is a layup (soft, off the glass, finishing-rated)
+  layupBonus: 0.08, // make chance a layup adds over a plain shot at the rim
   oopRange: 3.4, // metres from the rim a receiver can be for a pass to become an alley-oop
   oopFinishing: 60, // Finishing a receiver needs to catch and slam one
   dunkApex: 0.55, // metres the ball rises above the rim before the slam
@@ -252,11 +278,29 @@ export const LIVE = {
   crossCool: 1.4,
   crossBoost: 1.5,
   stepBackBoost: 0.8, // × the crossover burst for a step-back (crossover while pushing away from the hoop)
-  sprintOnL: 0, // TEST (dev menu): 1 = L is sprint (hold) and a double tap of L is the crossover / steal
-  doubleTap: 0.3, // seconds: two L presses this close are a double tap
-  sprintTap: 0.2, // seconds: tap sprint this briefly with the ball for a crossover
+  doubleTap: 0.3, // seconds: two sprint presses this close are a double tap (the crossover / steal)
   ankles: 0.4, // seconds a beaten defender stumbles
   anklesChance: 0.35, // plus 0.005 per point of Handles over Perimeter D
+  // 1v1: a beat for you to set up, and no smothering at the start of a possession
+  halfPause: 0.7, // half-court: seconds the CPU ball handler holds (a stationary dribble) after taking it back or a check
+  pickupGap: 3, // metres most CPU defenders sit off a handler still in his backcourt (half court: taking it back)
+  pressWhiff: 2.2, // × the stumble for a missed steal out in the handler's backcourt (half court: past the arc)
+  stealGrace: 0.8, // seconds after getting the ball before a CPU defender tries a steal
+  // CPU screens outside called plays: the teammate nearest the ball comes up beside it, plants, then rolls to the rim
+  aiScreenRate: 0.15, // tries per second (for the teammate nearest the ball)
+  aiScreenHold: 1.5, // seconds it stays planted
+  // floaters and eurosteps: moving toward the hoop faster than driveSpeed counts as driving
+  driveSpeed: 2, // m/s toward the hoop
+  floaterRange: 4.6, // a quick tap while driving, between layupRange and this from the rim, is a floater
+  floaterBonus: 0.05, // make chance a floater adds (Finishing + Shooting; contests count half: it goes over the big)
+  floaterAi: 0.6, // CPU floaters per second driving at the rim 2.5–4.5 m out with a man close (× its style's drive)
+  euroAi: 0.8, // CPU eurosteps per second driving inside eurostepRange with a man close (× its style's drive)
+  eurostepRange: 5.5, // the crossover while driving this close to the rim is a eurostep
+  euroTime: 0.45, // seconds for its two plants
+  euroPass: { from: 0.3, max: 0.8 }, // team games: a eurostep's finish is a pass instead, more likely the tighter the
+  // contest (none below `from`, up to `max` when smothered)
+  euroSlow: 0.35, // seconds a defender in front is held up (lighter than ankles)
+  specialDunk: { onFire: 0.35, breakaway: 0.15, base: 0.02 }, // chance a dunk is a 360 / windmill / tomahawk / eastbay
   // loose balls
   grabBase: 0.55, // grab radius in metres at Rebounding 0
   grabSlope: 0.006,
@@ -264,6 +308,18 @@ export const LIVE = {
 };
 
 /** How the CPU plays in the live game, by difficulty (PLAN.md §8). */
+/** CPU play styles (ai.ts styleOf picks one per Pokémon from its ratings). Multipliers on how often it pulls up
+ *  (shoot), passes, drives and crosses over (drive), likes the three (three) and gambles for steals (steal), and how
+ *  many seconds it holds the ball, stuck, before it forces a shot or a drive (patience). */
+export const AI_STYLES = {
+  BALANCED: { shoot: 1, pass: 1, drive: 1, three: 1, steal: 1, patience: 2.6 },
+  AGGRESSIVE: { shoot: 1.3, pass: 0.7, drive: 1.8, three: 0.8, steal: 1.6, patience: 1.6 },
+  "PASS FIRST": { shoot: 0.6, pass: 2.2, drive: 0.8, three: 1, steal: 1, patience: 2.4 },
+  "BALL HOG": { shoot: 1.7, pass: 0.2, drive: 1.3, three: 1.2, steal: 1, patience: 1.8 },
+  SHARPSHOOTER: { shoot: 1.4, pass: 1, drive: 0.6, three: 2.4, steal: 0.8, patience: 2.6 },
+};
+export type StyleName = keyof typeof AI_STYLES;
+
 export const LIVE_AI: Record<(typeof DIFFICULTIES)[number]["name"], {
   react: number; // seconds before it sees where you moved
   aim: number; // spread of its shot release (share of the meter)

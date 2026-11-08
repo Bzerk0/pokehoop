@@ -6,9 +6,10 @@
 // Phase 7: when the team has called a play (plays.ts), everyone runs their part of it; on defence each player follows
 // the team's scheme (man, 2-3 zone, full-court press, double the star). makeCoach is the CPU bench: it calls the
 // plays and schemes.
-import { LIVE, LIVE_AI } from "../ratingConfig.ts";
+import { AI_STYLES, LIVE, LIVE_AI, type StyleName } from "../ratingConfig.ts";
+import type { RatedPokemon } from "../types.ts";
 import {
-  callPlay, callScheme, COURT, dist, handlerOf, hoopOf, NO_INPUT, other, reachOf, spotOf, team,
+  callPlay, callScheme, COURT, courtwards, dist, farOut, handlerOf, hoopOf, NO_INPUT, other, reachOf, spotOf, team, towardHoop,
   type Game, type Input, type Player, type Side,
 } from "./game.ts";
 import { ovrOf, PLAY, PLAYS, playWeights, ZONE, ZONE3, type PlayName, type SchemeName, type Spot } from "./plays.ts";
@@ -33,16 +34,30 @@ function laneBlocked(g: Game, side: Side, a: { x: number; y: number }, b: { x: n
   });
 }
 
-/** A CPU brain for player i. Call it once per step for that player's input. */
-export function makeAi(i: number, level: AiLevel) {
+/** How a Pokémon plays when the CPU runs it (AI_STYLES): good passers lean pass-first, good shooters sharpshooter,
+ *  quick finishers aggressive, stars sometimes hog it; most are balanced. Fixed per Pokémon (a hash, not a draw). */
+export function styleOf(p: RatedPokemon): StyleName {
+  const a = p.attrs, x = Math.sin(p.id * 12.9898 + 4.1) * 43758.5453, h = x - Math.floor(x);
+  if (a.passing >= 75 && h < 0.7) return "PASS FIRST";
+  if (a.shooting >= 78 && h < 0.7) return "SHARPSHOOTER";
+  if (a.finishing >= 75 && a.speed >= 70 && h < 0.6) return "AGGRESSIVE";
+  if (ovrOf(p) >= 85 && h < 0.4) return "BALL HOG";
+  return h < 0.12 ? "BALL HOG" : h < 0.3 ? "AGGRESSIVE" : "BALANCED";
+}
+
+/** A CPU brain for player i. Call it once per step for that player's input. `style` overrides the one its ratings
+ *  give it (styleOf). */
+export function makeAi(i: number, level: AiLevel, style?: StyleName) {
   let seenX = 0, seenY = 0, seenT = -Infinity; // where it last noticed its man
   let release = LIVE.meterTime; // how long it'll hold this shot
   let jumpAt: number | null = null; // when it'll jump at a shooter (Infinity: decided not to)
   let holdT = 0; // seconds with the ball
   let cutUntil = 0, nextCut = 0; // cutting to the basket, and when it may next
+  let screenFor = -1, screenUntil = 0, planted = false; // setting a screen for this teammate (outside plays), until then
 
   return (g: Game, dt: number): Input => {
     const me = g.players[i], side = me.side, b = g.ball, size = g.size;
+    const styleName = style ?? styleOf(me.p), st = AI_STYLES[styleName];
     const inp: Input = { ...NO_INPUT };
     /** Steer toward a spot (stop within `slow`); turbo if it's far. Returns the distance. */
     const go = (tx: number, ty: number, slow = 0.25, turboFrom = 4) => {
@@ -67,7 +82,8 @@ export function makeAi(i: number, level: AiLevel) {
     const call = g.calls[side], play = call.play ? PLAY[call.play] : null, tPlay = (g.time - call.playAt) / COURT.scale;
     const isKey = call.key === i;
     /** A play spot [across, out] → the court, measured from the hoop we attack. */
-    const at = (s: Spot) => ({ x: COURT.w / 2 + s[0] * COURT.scale, y: myHoop.y + (side === 0 ? -s[1] : s[1]) * COURT.scale });
+    const out = courtwards(side); // from our hoop toward the court
+    const at = (s: Spot) => ({ x: COURT.w / 2 + s[0] * COURT.scale, y: myHoop.y + out * s[1] * COURT.scale });
 
     // ── dead ball: get set for the inbound ──
     if (g.dead > 0) {
@@ -122,6 +138,16 @@ export function makeAi(i: number, level: AiLevel) {
         return inp;
       }
       const d = dist(me, myHoop);
+      if (g.mustClear === side) {
+        // half-court, after a stop: take it back behind the arc before anything else
+        go(COURT.w / 2 + (me.x < COURT.w / 2 ? -1.5 : 1.5), myHoop.y + out * (COURT.three + 1.2), 0.3, 99);
+        return inp;
+      }
+      // half-court: a beat after taking it back or a check (a stationary dribble) before going at you
+      if (g.half && g.time - g.resetAt < LIVE.halfPause) {
+        holdT = 0;
+        return inp;
+      }
       if (d < LIVE.dunkRange - 0.3) {
         go(myHoop.x, myHoop.y, 0.05, 99);
         inp.turbo = true;
@@ -143,7 +169,16 @@ export function makeAi(i: number, level: AiLevel) {
         return inp;
       };
       // the shot clock running down (or stuck too long in a 1v1): get a shot up, play or no play
-      if ((g.shotClock < 3 && d < 9 * COURT.scale) || g.shotClock < 1.2 || (size === 1 && holdT > 6 && range)) return shoot();
+      if ((g.shotClock < 3 && d < 9 * COURT.scale) || g.shotClock < 1.2) return shoot();
+      // stuck with it (guarded tight, nothing on) for longer than my patience: force something. In range, shoot over
+      // him; out of range, cross him up and attack the rim (no more dribbling in the corner)
+      if (holdT > st.patience) {
+        if (range || d < LIVE.rimRange + 1.5) return shoot();
+        go(myHoop.x, myHoop.y, 0.05, 99);
+        inp.turbo = me.turbo > 0.2;
+        if (me.crossCool <= 0 && g.rng.next() < 3 * dt) inp.cross = true;
+        return inp;
+      }
 
       // running a play
       const hurry = g.shotClock < 4;
@@ -176,17 +211,30 @@ export function makeAi(i: number, level: AiLevel) {
         }
       }
 
+      // driving at the rim with a man close: now and then a floater a few metres out (a quick tap) or a eurostep
+      const traffic = gap < 2.5 && towardHoop(me) > LIVE.driveSpeed;
+      if (traffic && d > 2.5 && d < 4.5 && g.rng.next() < LIVE.floaterAi * st.drive * dt) {
+        release = 0;
+        inp.shoot = true;
+        holdT = 0;
+        return inp;
+      }
+      if (traffic && d < LIVE.eurostepRange && me.crossCool <= 0 && g.rng.next() < LIVE.euroAi * st.drive * dt) {
+        go(myHoop.x, myHoop.y, 0.05, 99);
+        inp.cross = true;
+        return inp;
+      }
       // shoot when open in range. Good shooters like the open three, most of all right after the catch (or every
       // possession ends in a drive)
       const three = d >= COURT.three && shooter >= 65;
-      const keen = (three ? 2.5 : 1) * (size > 1 && holdT < 1 ? 1.5 : 1);
-      if (range && open && g.rng.next() < level.pullUp * dt * (shooter / 70) * keen) return shoot();
+      const keen = (three ? 2.5 * st.three : 1) * (size > 1 && holdT < 1 ? 1.5 : 1);
+      if (range && open && g.rng.next() < level.pullUp * st.shoot * dt * (shooter / 70) * keen) return shoot();
       // pass: more often when a defender is in my face, or in a motion play; the point guard brings it up first
       if (size > 1 && holdT > 0.35) {
-        const backcourt = side === 0 ? me.y < COURT.l / 2 : me.y > COURT.l / 2;
+        const backcourt = out < 0 ? me.y < COURT.l / 2 : me.y > COURT.l / 2;
         const pressure = ahead && gap < 1.8 ? 2.5 : 1;
         const keenToPass = play?.passRate ?? 1;
-        if (g.rng.next() < level.pass * dt * pressure * keenToPass * (backcourt && me.slot === 0 ? 0.15 : 1)) {
+        if (g.rng.next() < level.pass * st.pass * dt * pressure * keenToPass * (backcourt && me.slot === 0 ? 0.15 : 1)) {
           const to = outlet(me);
           if (to) {
             inp.passTo = to.i;
@@ -195,17 +243,20 @@ export function makeAi(i: number, level: AiLevel) {
           }
         }
       }
-      // drive, slipping past a defender in the way (off a pick and roll, round the screener's side first)
+      // drive, slipping past a defender in the way (off a pick and roll or any teammate's screen, round the screener's
+      // side first)
       let tx = myHoop.x, ty = myHoop.y;
-      const screener = call.play === "PICK & ROLL" && call.key != null ? g.players[call.key] : null;
-      if (screener && tPlay < (play?.handlerWait ?? 0) + 1.2 && dist(me, screener) < 4) {
+      const pnr = call.play === "PICK & ROLL" && tPlay < (play?.handlerWait ?? 0) + 1.2;
+      const screener = g.players.find((q) => q.side === side && q !== me && dist(me, q) < 4 && dist(q, myHoop) < d + 0.5 && (q.screening || (pnr && q.i === call.key)));
+      if (screener) {
         tx = Math.max(1, Math.min(COURT.w - 1, screener.x + (screener.x >= me.x ? 1.4 : -1.4)));
         ty = screener.y + (myHoop.y - screener.y) * 0.3;
       } else if (ahead && gap < 2.5) {
-        const away = me.x <= near.x ? -1 : 1;
+        // slip round him, away from his side; pinned near a sideline, cut back toward the middle instead
+        const away = me.x < 2.5 ? 1 : me.x > COURT.w - 2.5 ? -1 : me.x <= near.x ? -1 : 1;
         tx = Math.max(1, Math.min(COURT.w - 1, me.x + away * 2.5));
         ty = me.y + (myHoop.y - me.y) * 0.3;
-        if (me.crossCool <= 0 && g.rng.next() < 1.2 * dt) inp.cross = true;
+        if (me.crossCool <= 0 && g.rng.next() < 1.2 * st.drive * dt) inp.cross = true;
       }
       go(tx, ty, 0.05, 99);
       inp.turbo = me.turbo > 0.3 && d < 14 && d > 4;
@@ -237,13 +288,39 @@ export function makeAi(i: number, level: AiLevel) {
         if (isKey && play!.screen && tPlay >= play!.screen[0] && tPlay <= play!.screen[1] && d < 0.8) inp.screen = true;
         return inp;
       }
+      // now and then (no play on) the teammate nearest the ball comes up and screens for him, then rolls to the rim
+      const hh = handlerOf(g);
+      const mates = hh?.side === side ? team(g, side).filter((q) => q !== hh) : [];
+      const nearest = mates.length ? mates.reduce((p, q) => (dist(q, hh!) < dist(p, hh!) ? q : p)) : null;
+      if (screenFor < 0 && !play && nearest === me && g.time > cutUntil && dist(hh!, myHoop) > 4 && dist(hh!, myHoop) < COURT.three + 3
+        && g.rng.next() < LIVE.aiScreenRate * dt) {
+        screenFor = hh!.i;
+        screenUntil = g.time + 2.5; // time to get there
+        planted = false;
+      }
+      if (screenFor >= 0 && (g.time > screenUntil || (!planted && hh?.i !== screenFor))) {
+        if (planted) cutUntil = g.time + 1.4; // done: roll to the rim
+        screenFor = -1;
+      }
+      if (screenFor >= 0) {
+        if (planted) inp.screen = true; // hold the spot (whoever has the ball can use it)
+        else {
+          const spot = screenSpot(hh!);
+          if (go(spot.x, spot.y, 0.2, 3) < 0.8) {
+            inp.screen = true;
+            planted = true;
+            screenUntil = g.time + LIVE.aiScreenHold;
+          }
+        }
+        return inp;
+      }
       const s = spotOf(side, me.slot, size);
       // now and then, cut hard to the basket, then drift back out
       if (g.time > nextCut && g.rng.next() < 0.25 * dt) {
         cutUntil = g.time + 1.4;
         nextCut = g.time + 4 + g.rng.next() * 4;
       }
-      if (g.time < cutUntil) go(myHoop.x + (me.slot % 2 ? 1 : -1), myHoop.y + (side === 0 ? -1.2 : 1.2), 0.2, 2);
+      if (g.time < cutUntil) go(myHoop.x + (me.slot % 2 ? 1 : -1), myHoop.y + out * 1.2, 0.2, 2);
       else go(s.x, s.y);
       return inp;
     }
@@ -255,13 +332,8 @@ export function makeAi(i: number, level: AiLevel) {
         let step = p.keyPath[0];
         for (const s of p.keyPath) if (s.at <= tPlay) step = s;
         if (!step) return null;
-        if (step.to === "rim") return { x: myHoop.x + 0.8, y: myHoop.y + (side === 0 ? -1.3 : 1.3) }; // the roll
-        if (step.to === "screen") {
-          // beside the ball handler, a step toward the hoop: right where his defender stands
-          const hh = handlerOf(g) ?? me, dd = dist(hh, myHoop) || 1;
-          const ux = (myHoop.x - hh.x) / dd, uy = (myHoop.y - hh.y) / dd;
-          return { x: hh.x + ux * 1.2 - uy * 0.7, y: hh.y + uy * 1.2 + ux * 0.7 };
-        }
+        if (step.to === "rim") return { x: myHoop.x + 0.8, y: myHoop.y + out * 1.3 }; // the roll
+        if (step.to === "screen") return screenSpot(handlerOf(g) ?? me);
         return at(step.to);
       }
       // motion: everyone moves round the spots
@@ -272,12 +344,22 @@ export function makeAi(i: number, level: AiLevel) {
       return s ? at(s) : null;
     }
 
+    /** Where a screen for this ball handler goes: beside him, a step toward the hoop, right where his defender stands. */
+    function screenSpot(hh: Player) {
+      const dd = dist(hh, myHoop) || 1, ux = (myHoop.x - hh.x) / dd, uy = (myHoop.y - hh.y) / dd;
+      return { x: hh.x + ux * 1.2 - uy * 0.7, y: hh.y + uy * 1.2 + ux * 0.7 };
+    }
+
     /** Stay between my man and the hoop: tight on the ball, sagging toward the hoop off it. `tight` (the press)
      *  plays everyone close, denying the pass. Guarding anyone but my own man, I see him straight away. */
     function guard(m: Player, onBall: boolean, tight = false) {
       const sx = m === man ? seenX : m.x, sy = m === man ? seenY : m.y;
       const dd = Math.hypot(theirHoop.x - sx, theirHoop.y - sy) || 1;
-      const gap = onBall ? Math.min(tight ? 0.9 : 1.3, dd * 0.5) : tight ? Math.min(1.2, dd * 0.2) : Math.min(3, dd * 0.3);
+      // 1v1, unless AGGRESSIVE: no reaching while he can't score yet (backcourt; half court: taking it back or past the
+      // arc), and room while he can't shoot at all (half court keeps the arc contested once it's taken back)
+      const calm = onBall && size === 1 && styleName !== "AGGRESSIVE" && farOut(g, m);
+      const sag = calm && (!g.half || g.mustClear === m.side);
+      const gap = sag ? Math.min(LIVE.pickupGap, dd * 0.7) : onBall ? Math.min(tight ? 0.9 : 1.3, dd * 0.5) : tight ? Math.min(1.2, dd * 0.2) : Math.min(3, dd * 0.3);
       const far = go(sx + ((theirHoop.x - sx) / dd) * gap, sy + ((theirHoop.y - sy) / dd) * gap, 0.2, 2.5);
       inp.turbo = far > 2.5 && me.turbo > 0.15;
       if (!onBall) return;
@@ -297,8 +379,9 @@ export function makeAi(i: number, level: AiLevel) {
         jumpAt = null;
         // fewer swipes in team games: with help behind, a gamble isn't needed (and turnovers swamped possessions);
         // the press gambles more
-        const rate = level.steal * (size > 1 ? 0.3 : 1) * (tight ? 1.25 : 1);
-        if (close < LIVE.stealRange && me.stealCool <= 0 && g.rng.next() < rate * dt) inp.steal = true;
+        const rate = level.steal * st.steal * (size > 1 ? 0.3 : 1) * (tight ? 1.25 : 1);
+        const wait = calm || (size === 1 && g.time - g.gainAt < LIVE.stealGrace); // 1v1: a moment with the ball first
+        if (!wait && close < LIVE.stealRange && me.stealCool <= 0 && g.rng.next() < rate * dt) inp.steal = true;
       }
     }
 
@@ -333,7 +416,7 @@ export function makeAi(i: number, level: AiLevel) {
       const tx = k === 0 ? handler.x + ux * 0.9 : handler.x + side_ * 0.9;
       const ty = k === 0 ? handler.y + uy * 0.9 : handler.y + uy * 0.3;
       go(tx, ty, 0.1, 1.5);
-      const rate = level.steal * 0.3 * 1.5; // trapping is all about the steal (but not every trip)
+      const rate = level.steal * st.steal * 0.3 * 1.5; // trapping is all about the steal (but not every trip)
       if (dist(me, handler) < LIVE.stealRange && me.stealCool <= 0 && g.rng.next() < rate * dt) inp.steal = true;
     }
 
@@ -344,7 +427,7 @@ export function makeAi(i: number, level: AiLevel) {
       if (handler === star && man === weakest && star !== weakest) {
         const dd = dist(star, theirHoop) || 1;
         go(star.x + ((theirHoop.x - star.x) / dd) * 0.9 + (star.x < COURT.w / 2 ? 0.8 : -0.8), star.y + ((theirHoop.y - star.y) / dd) * 0.9, 0.1, 1.5);
-        const rate = level.steal * 0.3 * 2;
+        const rate = level.steal * st.steal * 0.3 * 2;
         if (dist(me, star) < LIVE.stealRange && me.stealCool <= 0 && g.rng.next() < rate * dt) inp.steal = true;
         return;
       }
@@ -381,7 +464,7 @@ export function makeAi(i: number, level: AiLevel) {
       if (shotBy != null) {
         if (shotBy === side) {
           const big = me.slot >= 3 || (size === 3 && me.slot === 2) || size === 1;
-          if (big) go(myHoop.x + (me.slot % 2 ? 1.2 : -1.2), myHoop.y + (side === 0 ? -1.4 : 1.4), 0.2, 2);
+          if (big) go(myHoop.x + (me.slot % 2 ? 1.2 : -1.2), myHoop.y + out * 1.4, 0.2, 2);
           else if (me.slot === 0) go(COURT.w / 2, COURT.l / 2 + (side === 0 ? -2 : 2)); // get back
           else {
             const s = spotOf(side, me.slot, size);

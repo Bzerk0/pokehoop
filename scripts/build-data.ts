@@ -57,15 +57,24 @@ async function cropSprite(png: Buffer, outFile: string) {
   return { w, h };
 }
 
-async function buildOne(id: number): Promise<PokemonData> {
+/** A species' default form, plus its Alolan form if it has one (its own PokéAPI number, types, stats and sprite;
+ *  it counts as an Alola Pokémon for region chemistry and keeps the species' evolution line). */
+async function buildOne(id: number): Promise<PokemonData[]> {
   const species = await getJson<ApiSpecies>(`pokemon-species/${id}`);
+  const out: PokemonData[] = [];
   const variety = species.varieties.find((v) => v.is_default) ?? species.varieties[0];
-  const pokemon = await getJson<ApiPokemon>(`pokemon/${variety.pokemon.name}`);
-  const url = pokemon.sprites.front_default;
-  if (!url) throw new Error(`${species.name}: no front_default sprite`);
-  const png = await cached(url, join(CACHE, "sprites", `${id}.png`));
-  const { w, h } = await cropSprite(png, join(OUT_SPRITES, `${id}.png`));
-  return toPokemonData(species, pokemon, { path: `/sprites/${id}.png`, w, h });
+  const alola = species.varieties.filter((v) => !v.is_default && v.pokemon.name.endsWith("-alola") && !v.pokemon.name.includes("totem"));
+  for (const v of [variety, ...alola]) {
+    const pokemon = await getJson<ApiPokemon>(`pokemon/${v.pokemon.name}`);
+    const n = v === variety ? id : pokemon.id;
+    const url = pokemon.sprites.front_default;
+    if (!url) throw new Error(`${pokemon.name}: no front_default sprite`);
+    const png = await cached(url, join(CACHE, "sprites", `${n}.png`));
+    const { w, h } = await cropSprite(png, join(OUT_SPRITES, `${n}.png`));
+    const data = toPokemonData(species, pokemon, { path: `/sprites/${n}.png`, w, h });
+    out.push(v === variety ? data : { ...data, id: n, slug: pokemon.name, name: `Alolan ${data.name}`, generation: 7 });
+  }
+  return out;
 }
 
 async function main() {
@@ -75,7 +84,7 @@ async function main() {
   const { count } = await getJson<{ count: number }>("pokemon-species?limit=1");
   console.log(`${count} species`);
 
-  const out: PokemonData[] = new Array(count);
+  const out: PokemonData[][] = new Array(count);
   const failures: string[] = [];
   let next = 1, done = 0;
   await Promise.all(
@@ -97,8 +106,9 @@ async function main() {
     console.error("Nothing written. Re-run to retry (finished downloads are cached).");
     process.exit(1);
   }
-  await writeFile(OUT_DATA, JSON.stringify(out));
-  console.log(`Wrote ${out.length} Pokémon to ${OUT_DATA}`);
+  const all = [...out.map((forms) => forms[0]), ...out.flatMap((forms) => forms.slice(1))]; // the species in dex order, then the Alolan forms
+  await writeFile(OUT_DATA, JSON.stringify(all));
+  console.log(`Wrote ${all.length} Pokémon to ${OUT_DATA}`);
 }
 
 main();

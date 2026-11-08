@@ -26,7 +26,10 @@ export const COURT = {
 export type Side = 0 | 1;
 export const other = (s: Side): Side => (s === 0 ? 1 : 0);
 /** The hoop a side attacks: you (0) go up to the top one, the CPU (1) comes down to the bottom one. */
-export const hoopOf = (side: Side) => ({ x: COURT.w / 2, y: side === 0 ? COURT.l - COURT.hoopIn : COURT.hoopIn });
+let halfCourt = false; // the game being played is half-court: both sides attack the far hoop (set by newGame and step)
+export const hoopOf = (side: Side) => ({ x: COURT.w / 2, y: side === 0 || halfCourt ? COURT.l - COURT.hoopIn : COURT.hoopIn });
+/** From a side's hoop out toward the court, along y: -1 for the far hoop, 1 for the near one. */
+export const courtwards = (side: Side) => (hoopOf(side).y > COURT.l / 2 ? -1 : 1);
 
 /** What one player asks for this step. x/y is the stick (up = +y); shoot is K held.
  *  steal (J): pass to the teammate you face with the ball. Without it: the player you steer switches to the
@@ -43,6 +46,9 @@ export const NO_INPUT: Input = { x: 0, y: 0, turbo: false, shoot: false, steal: 
 export type Call = { play: PlayName | null; playAt: number; key: number | null; scheme: SchemeName };
 
 export type Act = "free" | "wind" | "air" | "dunk" | "stumble" | "cross";
+/** Special dunks (rare: on fire, a breakaway): the view animates them. */
+export const DUNK_STYLES = ["360", "WINDMILL", "TOMAHAWK", "EASTBAY"] as const;
+export type DunkStyle = (typeof DUNK_STYLES)[number];
 
 /** Everyone on a team's roster, on the court or the bench: energy (0–100) and their box-score line. */
 export type RosterEntry = { p: RatedPokemon; slot: number; energy: number; line: Line };
@@ -73,6 +79,8 @@ export type Player = {
   doubled: boolean; // used its double jump this time in the air
   streak: number; // straight makes (a miss or a sub resets it)
   onFire: boolean; // ON FIRE: bigger green zone, endless turbo, until the other team scores
+  euro: number; // a eurostep ("cross" act): the first plant's side (±1), the second goes back across; 0 = not one
+  dunkStyle: DunkStyle | null; // this dunk is a special one (null: a plain slam); cleared on landing
 };
 
 export type Flight = {
@@ -113,6 +121,8 @@ export type Game = {
   shotClock: number;
   clockReset: boolean; // the shot hit the rim: the next team to touch it gets a fresh clock
   control: number; // the side-0 player you're steering
+  half: boolean; // half-court: both sides attack the far hoop
+  mustClear: Side | null; // half-court: this side has to take the ball back behind the arc before it can shoot
   solo: boolean; // one-character mode: you only ever steer `control` (no switching on a pass or on defence)
   calls: [Call, Call]; // each team's play and scheme
   practice: boolean; // the tutorial: no shot clock, nobody wins
@@ -132,6 +142,8 @@ export type Game = {
   winner: Side | null;
   events: GameEvent[]; // this step's, for the view (sounds, popups)
   lastShot: { side: Side; zone: Zone; timing: Timing; chance: number; made: boolean } | null;
+  gainAt: number; // when the ball handler got it (1v1: the CPU gives you a moment before reaching)
+  resetAt: number; // half-court: when the ball was last taken back or checked (the CPU handler holds a beat)
 };
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -221,7 +233,7 @@ const SPOTS: Record<number, [number, number][]> = {
 export function spotOf(side: Side, slot: number, size: number) {
   const [across, out] = ((SPOTS[size] ?? SPOTS[5])[slot] ?? [0, 6]).map((v) => v * COURT.scale); // spots grow with the court
   const hoop = hoopOf(side);
-  return { x: COURT.w / 2 + across, y: hoop.y + (side === 0 ? -out : out) };
+  return { x: COURT.w / 2 + across, y: hoop.y + courtwards(side) * out };
 }
 
 // ── setting up ────────────────────────────────────────────────────────────────
@@ -230,7 +242,7 @@ function player(i: number, side: Side, slot: number, p: RatedPokemon, x: number,
     i, r: slot, home: slot, sprinting: false,
     side, slot, p, x, y, z: 0, vx: 0, vy: 0, vz: 0, fx: 0, fy: side === 0 ? 1 : -1, turbo: 1, act: "free", actT: 0,
     crossCool: 0, stealCool: 0, held: false, wind: 0, dunkFrom: null, dunkTested: [], screening: false, slow: 0,
-    screenedAt: -Infinity, streak: 0, onFire: false, doubled: false,
+    screenedAt: -Infinity, streak: 0, onFire: false, doubled: false, euro: 0, dunkStyle: null,
   };
 }
 
@@ -244,6 +256,7 @@ export type GameOptions = {
   cpuSlots?: number[];
   youBench?: { p: RatedPokemon; slot: number }[];
   cpuBench?: { p: RatedPokemon; slot: number }[];
+  half?: boolean; // half-court (1v1): both attack the far hoop; take it back after a stop, check it after a make
 };
 
 /** A new game, `you.length` a side (1, 3 or 5): your point guard starts with the ball at your end, the CPU waits
@@ -259,23 +272,26 @@ export function newGame(you: RatedPokemon[], cpu: RatedPokemon[], seed: number, 
     ...court.map((p, k) => ({ p, slot: slots?.[k] ?? k, energy: 100, line: newLine(p.id, slots?.[k] ?? k) })),
     ...bench.map(({ p, slot }) => ({ p, slot, energy: 100, line: newLine(p.id, slot) })),
   ];
-  return {
+  halfCourt = !!o.half;
+  const g: Game = {
     size, players, ball: { holder: 0, x: COURT.w / 2, y: 3 * k, z: 0, flight: null }, score: [0, 0],
     target: o.timed || o.practice ? Infinity : LIVE.targetBySize[size] ?? LIVE.targetScore, rng: makeRng(seed), time: 0, dead: 0,
     practice: !!o.practice,
-    next: 0, poss: 0, shotClock: LIVE.shotClock, clockReset: false, control: 0, solo: false, over: false, winner: null, events: [],
+    next: 0, poss: 0, shotClock: LIVE.shotClock, clockReset: false, control: 0, half: !!o.half, mustClear: null, solo: false, over: false, winner: null, events: [],
     lastShot: null, calls: [0, 1].map(() => ({ play: null, playAt: 0, key: null, scheme: "MAN" as SchemeName })) as [Call, Call],
     timed: !!o.timed, period: 0, clock: SIM.quarterSec, inBreak: false, periods: [[0], [0]],
     rosters: [roster(you, o.youSlots, o.youBench), roster(cpu, o.cpuSlots, o.cpuBench)], autoSub: [true, true],
-    names: o.names ?? ["YOU", "CPU"], lastPass: null, reboundable: false, highlights: [],
+    names: o.names ?? ["YOU", "CPU"], lastPass: null, reboundable: false, highlights: [], gainAt: 0, resetAt: -Infinity,
   };
+  if (g.half) checkBall(g, 0); // half-court: you check it at the top of the key
+  return g;
 }
 
 /** A game between two full lineups (8 ids each): 5 a side starts PG–C, 3 a side PG, SF and C, 1 a side each team's
  *  best starter; everyone else is on the bench. Team games are timed (4 quarters, fatigue, subs); 1v1 is first to 11. */
 export function lineupGame(
   home: { name: string; ids: (number | null)[] }, away: { name: string; ids: (number | null)[] },
-  dex: Map<number, RatedPokemon>, size: 1 | 3 | 5, seed: number, practice = false, homePicks?: number[],
+  dex: Map<number, RatedPokemon>, size: 1 | 3 | 5, seed: number, practice = false, homePicks?: number[], half = false,
 ) {
   // homePicks: the lineup slots you chose on the select screen (in your order); the rest of the team is the bench
   const pick = (ids: (number | null)[], chosen?: number[]) => {
@@ -287,7 +303,7 @@ export function lineupGame(
   const h = pick(home.ids, homePicks), a2 = pick(away.ids);
   return newGame(h.court, a2.court, seed, {
     timed: size > 1 && !practice, practice, names: [home.name || "YOU", away.name || "CPU"],
-    youSlots: h.slots, cpuSlots: a2.slots, youBench: h.bench, cpuBench: a2.bench,
+    youSlots: h.slots, cpuSlots: a2.slots, youBench: h.bench, cpuBench: a2.bench, half,
   });
 }
 
@@ -454,6 +470,7 @@ export const playTime = (g: Game, side: Side) => (g.calls[side].play ? g.time - 
 // ── one step ──────────────────────────────────────────────────────────────────
 /** Move the game on by dt seconds. inputs[i] is what player i asks for (the view gives yours to g.control). */
 export function step(g: Game, inputs: Input[], dt: number) {
+  halfCourt = g.half;
   g.events = [];
   if (g.over) return;
   g.time += dt;
@@ -490,7 +507,7 @@ function screens(g: Game) {
       d.screenedAt = g.time;
       d.vx *= 0.2;
       d.vy *= 0.2;
-      emit(g, "screen", s.side, "SCREEN!");
+      emit(g, "screen", s.side, "SCREEN!", s.i, d.i);
     }
   }
 }
@@ -540,12 +557,18 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
         pl.z = pl.vz = 0;
         pl.act = "free";
         pl.doubled = false;
+        pl.dunkStyle = null;
       }
       break;
     case "wind":
       want = 0; // set your feet
       pl.wind += dt;
       if (!hasBall) pl.act = "free"; // stripped mid-shot
+      else if (released && pl.wind < LIVE.quickTap && (backcourt(pl) || dist(pl, hoopOf(pl.side)) >= COURT.three)) {
+        // no quick shots from your own half, and no quick threes: from out there you hold it and time it
+        pl.act = "free";
+        if (!backcourt(pl)) emit(g, "move", pl.side, "HOLD FOR A THREE", pl.i);
+      }
       else if (released || pl.wind >= LIVE.meterTime * LIVE.meterOver) shoot(g, pl);
       break;
     case "dunk":
@@ -553,12 +576,38 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
       return;
     case "cross":
       control = false;
-      if (pl.actT <= 0) pl.act = "free";
+      if (pl.euro) {
+        // a eurostep: one plant to the side, then back across, still going at the rim (easing off right under it)
+        const hoop = hoopOf(pl.side), hd = dist(pl, hoop) || 1, ux = (hoop.x - pl.x) / hd, uy = (hoop.y - pl.y) / hd;
+        const lat = (pl.actT > LIVE.euroTime / 2 ? pl.euro : -pl.euro) * 0.75, on = Math.min(1, hd / 2) * 0.7, sp = speedOf(pl);
+        pl.vx = (ux * on - uy * lat) * sp;
+        pl.vy = (uy * on + ux * lat) * sp;
+      }
+      if (pl.actT <= 0) {
+        const finish = pl.euro !== 0 && hasBall;
+        pl.act = "free";
+        pl.euro = 0;
+        if (finish) {
+          // the eurostep's finish, no button needed: the layup, or (crowded) a dish to the open man
+          const hoop = hoopOf(pl.side), mate = euroDish(g, pl);
+          if (mate) {
+            emit(g, "move", pl.side, "DISH!", pl.i, mate.i);
+            passBall(g, pl, mate);
+          } else layup(g, pl, hoop, dist(pl, hoop) >= LIVE.layupRange);
+        }
+      }
       break;
     case "free": {
       const target = inp.passTo != null ? g.players[inp.passTo] : null;
-      if (hasBall && pressed) {
-        if (inp.turbo && dist(pl, hoopOf(pl.side)) < LIVE.dunkRange) return startDunk(pl);
+      if (hasBall && g.mustClear === pl.side && dist(pl, hoopOf(pl.side)) >= COURT.three + 0.2) {
+        g.mustClear = null; // taken back
+        g.resetAt = g.time;
+      }
+      if (inp.screen && !hasBall) want = 0; // setting a screen: plant your feet
+      if (hasBall && pressed && g.mustClear === pl.side) {
+        emit(g, "move", pl.side, "TAKE IT BACK!", pl.i); // half-court: past the arc first
+      } else if (hasBall && pressed) {
+        if (inp.turbo && dist(pl, hoopOf(pl.side)) < LIVE.dunkRange) return startDunk(g, pl);
         pl.act = "wind";
         pl.wind = 0;
         want = 0;
@@ -681,11 +730,11 @@ export function passBall(g: Game, from: Player, to: Player) {
   if (oop) {
     const z1 = COURT.rimZ + LIVE.dunkApex;
     g.ball.flight = {
-      kind: "pass", x0: from.x, y0: from.y, z0: 1.2, x1: hoop.x, y1: hoop.y + (to.side === 0 ? -0.35 : 0.35), z1, peak: z1 + 1.2 + d * 0.04,
+      kind: "pass", x0: from.x, y0: from.y, z0: 1.2, x1: hoop.x, y1: hoop.y + courtwards(to.side) * 0.35, z1, peak: z1 + 1.2 + d * 0.04,
       t: 0, dur: Math.max(0.55, (d / speed) * 1.25), made: false, points: 2, by: from.i, to: to.i, tested: [], oop: true,
     };
     g.lastPass = { side: from.side, by: from.r, to: to.r, at: g.time };
-    emit(g, "pass", from.side, "");
+    emit(g, "pass", from.side, "", from.i, to.i);
     emit(g, "move", to.side, "ALLEY-OOP!", to.i, from.i);
     return;
   }
@@ -695,7 +744,7 @@ export function passBall(g: Game, from: Player, to: Player) {
   };
   // (you keep the passer until the catch: gain() hands you the receiver then)
   g.lastPass = { side: from.side, by: from.r, to: to.r, at: g.time };
-  emit(g, "pass", from.side, "");
+  emit(g, "pass", from.side, "", from.i, to.i);
 }
 
 /** Put the ball in player i's hands, live, right now (the tutorial sets up its drills with this). */
@@ -752,9 +801,45 @@ export const quickChance = (zone: Zone, rating: number, contest: number, d: numb
     0.02, 0.97,
   );
 
+/** In your own half: on the far side of half court from the hoop you attack. */
+const backcourt = (pl: Player) => (hoopOf(pl.side).y > COURT.l / 2 ? pl.y < COURT.l / 2 : pl.y > COURT.l / 2);
+/** Still far from scoring: in its own half (full court), or taking it back / out past the arc (half court). */
+export const farOut = (g: Game, pl: Player) =>
+  g.half ? g.mustClear === pl.side || dist(pl, hoopOf(pl.side)) > COURT.three + 0.2 : backcourt(pl);
+/** How fast a player is heading at the hoop it attacks (m/s; negative: away from it). */
+export function towardHoop(pl: Player) {
+  const hoop = hoopOf(pl.side), d = dist(pl, hoop) || 1;
+  return (pl.vx * (hoop.x - pl.x) + pl.vy * (hoop.y - pl.y)) / d;
+}
+
+/** A quick tap right under the rim: a layup, laid soft off the glass (Finishing, not Shooting, decides it). On the
+ *  move a few metres out: a floater, lofted high over the big (Finishing and Shooting; a contest counts half). */
+function layup(g: Game, pl: Player, hoop: { x: number; y: number }, floater = false) {
+  const contest = contestOn(g, pl) * (floater ? 0.5 : 1);
+  const rating = (floater ? (a(pl).finishing + a(pl).shooting) / 2 : a(pl).finishing) * fresh(g, pl);
+  const chance = clamp(makeChance(floater ? "mid" : "rim", rating, "good", contest) + (floater ? LIVE.floaterBonus : LIVE.layupBonus), 0.02, 0.97);
+  const made = g.rng.next() < chance;
+  lineOf(g, pl).fga++;
+  g.lastShot = { side: pl.side, zone: floater ? zoneAt(dist(pl, hoop)) : "rim", timing: "good", chance, made };
+  pl.act = "air";
+  pl.vz = 3.6;
+  const dd = dist(pl, hoop) || 1;
+  pl.vx = ((hoop.x - pl.x) / dd) * 1.5; // a step in, toward the rim
+  pl.vy = ((hoop.y - pl.y) / dd) * 1.5;
+  g.ball.holder = null;
+  const z0 = reachOf(pl) + 0.4;
+  g.ball.flight = {
+    kind: "shot", x0: pl.x, y0: pl.y, z0, x1: hoop.x, y1: hoop.y, z1: COURT.rimZ, peak: COURT.rimZ + (floater ? 2.3 : 0.7), t: 0,
+    dur: floater ? 0.8 : 0.5, made, points: 2, by: pl.i, to: null, tested: [],
+  };
+  emit(g, "release", pl.side, floater ? "FLOATER" : "LAYUP", pl.i);
+}
+
 function shoot(g: Game, pl: Player) {
   const hoop = hoopOf(pl.side);
   const d = dist(pl, hoop);
+  if (pl.wind < LIVE.quickTap && d < LIVE.layupRange) return layup(g, pl, hoop); // a quick tap under the rim
+  if (pl.wind < LIVE.quickTap && d < LIVE.floaterRange && towardHoop(pl) > LIVE.driveSpeed) return layup(g, pl, hoop, true); // on the move: a floater
   const zone = zoneAt(d);
   const rating = (zone === "rim" ? a(pl).finishing : a(pl).shooting) * fresh(g, pl);
   const contest = contestOn(g, pl);
@@ -786,19 +871,24 @@ function shoot(g: Game, pl: Player) {
   emit(g, "release", pl.side, quick ? "QUICK" : timing === "perfect" ? "PERFECT" : timing === "good" ? "GOOD" : meter > 1 ? "LATE" : "EARLY");
 }
 
-function startDunk(pl: Player) {
+function startDunk(g: Game, pl: Player) {
   pl.act = "dunk";
   pl.actT = LIVE.dunkTime;
   pl.dunkFrom = { x: pl.x, y: pl.y };
   pl.dunkTested = [];
   pl.vx = pl.vy = 0;
+  // now and then a special one (the view animates it): on fire, or a big finisher all alone; rare otherwise
+  const alone = a(pl).finishing >= 80 && g.players.every((q) => q.side === pl.side || dist(q, pl) >= 3);
+  const odds = pl.onFire ? LIVE.specialDunk.onFire : alone ? LIVE.specialDunk.breakaway : LIVE.specialDunk.base;
+  pl.dunkStyle = a(pl).finishing >= 70 && g.rng.next() < odds ? DUNK_STYLES[Math.floor(g.rng.next() * DUNK_STYLES.length)] : null;
+  if (pl.dunkStyle) emit(g, "move", pl.side, pl.dunkStyle === "360" ? "360 DUNK!" : `${pl.dunkStyle}!`, pl.i); // (release stays "DUNK")
 }
 
 /** Fly from where the dunk started to just in front of the rim and up; defenders can block it on the way. */
 function dunkStep(g: Game, pl: Player) {
   const hoop = hoopOf(pl.side), from = pl.dunkFrom!;
   const s = clamp(1 - pl.actT / LIVE.dunkTime, 0, 1);
-  const toward = pl.side === 0 ? -0.35 : 0.35; // stop just short of the rim, on the court side
+  const toward = courtwards(pl.side) * 0.35; // stop just short of the rim, on the court side
   pl.x = lerp(from.x, hoop.x, s);
   pl.y = lerp(from.y, hoop.y + toward, s);
   pl.z = Math.sin(s * Math.PI * 0.5) * Math.max(0.3, COURT.rimZ + LIVE.dunkApex - reachOf(pl)); // easing up to the apex
@@ -847,6 +937,8 @@ function crossover(g: Game, pl: Player, sx: number, sy: number) {
   // pushing away from the hoop: a step-back, a hop straight back to make room for the shot
   const hoop = hoopOf(pl.side), hd = dist(pl, hoop) || 1;
   const stepBack = (dx * (hoop.x - pl.x) + dy * (hoop.y - pl.y)) / hd < -0.5;
+  if (!stepBack && hd < LIVE.eurostepRange && towardHoop(pl) > LIVE.driveSpeed) return eurostep(g, pl, sx, sy); // driving at the rim
+  pl.euro = 0;
   const top = speedOf(pl) * LIVE.crossBoost * (stepBack ? LIVE.stepBackBoost : 1);
   pl.vx = dx * top;
   pl.vy = dy * top;
@@ -864,6 +956,33 @@ function crossover(g: Game, pl: Player, sx: number, sy: number) {
   }
 }
 
+/** Driving at the rim: two quick plants, the first to one side (the way the stick leans, else away from the man), the
+ *  second back across, still going forward (movePlayer's "cross" steers it). The man in front is caught leaning. */
+/** After a eurostep, in a team game: pass instead of shooting? The tighter the contest, the likelier, to the
+ *  teammate with the most room (nearer the rim breaks a tie). Null: take the layup. */
+function euroDish(g: Game, pl: Player): Player | null {
+  if (g.size === 1) return null;
+  const { from, max } = LIVE.euroPass;
+  const chance = max * clamp((contestOn(g, pl) - from) / (1 - from), 0, 1);
+  if (chance <= 0 || g.rng.next() >= chance) return null;
+  const hoop = hoopOf(pl.side), room = (q: Player) => Math.min(...g.players.filter((d) => d.side !== q.side).map((d) => dist(d, q)));
+  const mates = team(g, pl.side).filter((q) => q !== pl);
+  return mates.reduce((best, q) => (room(q) - 0.15 * dist(q, hoop) > room(best) - 0.15 * dist(best, hoop) ? q : best), mates[0]);
+}
+
+function eurostep(g: Game, pl: Player, sx: number, sy: number) {
+  const hoop = hoopOf(pl.side), hd = dist(pl, hoop) || 1, ux = (hoop.x - pl.x) / hd, uy = (hoop.y - pl.y) / hd;
+  const def = nearestFoe(g, pl);
+  const lean = sx * -uy + sy * ux, away = (pl.x - def.x) * -uy + (pl.y - def.y) * ux;
+  pl.euro = Math.abs(lean) > 0.2 ? Math.sign(lean) : Math.sign(away) || 1;
+  pl.act = "cross";
+  pl.actT = LIVE.euroTime;
+  pl.crossCool = LIVE.crossCool;
+  const fooled = def.act === "free" && dist(def, pl) < 1.8 && (def.x - pl.x) * ux + (def.y - pl.y) * uy > 0;
+  if (fooled) def.slow = Math.max(def.slow, LIVE.euroSlow);
+  emit(g, "move", pl.side, "EUROSTEP", pl.i, fooled ? def.i : undefined);
+}
+
 function trySteal(g: Game, pl: Player) {
   pl.stealCool = LIVE.stealCool;
   const h = handlerOf(g);
@@ -878,7 +997,8 @@ function trySteal(g: Game, pl: Player) {
     return;
   }
   pl.act = "stumble";
-  pl.actT = LIVE.stumble;
+  // 1v1, pressing out where he can't score yet: a whiff leaves you stumbling longer, and he's gone
+  pl.actT = LIVE.stumble * (g.size === 1 && h && h.side !== pl.side && farOut(g, h) ? LIVE.pressWhiff : 1);
   emit(g, "whiff", pl.side, "");
 }
 
@@ -913,7 +1033,9 @@ function gain(g: Game, pl: Player) {
   g.ball.flight = null;
   g.ball.x = pl.x;
   g.ball.y = pl.y;
+  g.gainAt = g.time;
   if (changed || g.clockReset) g.shotClock = LIVE.shotClock;
+  if (changed && g.half) g.mustClear = pl.side; // half-court: take it back behind the arc first
   g.clockReset = false;
   g.reboundable = false;
   if (changed) {
@@ -950,6 +1072,7 @@ function violation(g: Game) {
 
 /** The team takes it out from under the hoop at its own end: one player inbounds it to the point guard. */
 function inbound(g: Game, side: Side) {
+  if (g.half) return checkBall(g, side);
   const baseY = side === 0 ? 0.8 : COURT.l - 0.8;
   const mates = team(g, side);
   // one-character mode: you never take it out yourself (you'd have to pass it straight away): you get it
@@ -965,6 +1088,20 @@ function inbound(g: Game, side: Side) {
   g.shotClock = LIVE.shotClock;
   const rec = you ?? mates.find((p) => p.slot === 0 && p !== inb) ?? mates.find((p) => p !== inb);
   if (rec) passBall(g, inb, rec);
+}
+
+/** Half-court: `side` checks the ball at the top of the key (behind the arc, so nothing to take back); the defence
+ *  steps up in front. */
+function checkBall(g: Game, side: Side) {
+  const hoop = hoopOf(side), out = courtwards(side), top = COURT.three + 1.5;
+  for (const pl of g.players) {
+    const on = pl.side === side;
+    Object.assign(pl, { x: COURT.w / 2 + (on ? 0 : 0.3), y: hoop.y + out * (on ? top : top - 1.6), z: 0, vx: 0, vy: 0, vz: 0, act: "free" as Act });
+  }
+  gain(g, team(g, side)[0]);
+  g.shotClock = LIVE.shotClock;
+  g.mustClear = null;
+  g.resetAt = g.time;
 }
 
 function moveBall(g: Game, dt: number) {
@@ -1052,7 +1189,7 @@ function moveBall(g: Game, dt: number) {
         // off the rim, back out toward the court; whoever gets it gets a fresh shot clock
         g.clockReset = true;
         g.reboundable = true;
-        const ang = (side === 0 ? -Math.PI / 2 : Math.PI / 2) + (g.rng.next() - 0.5) * 2.4;
+        const ang = (courtwards(side) < 0 ? -Math.PI / 2 : Math.PI / 2) + (g.rng.next() - 0.5) * 2.4;
         const far = 1.5 + g.rng.next() * 3;
         loose(g, b, { x: b.x + Math.cos(ang) * far, y: b.y + Math.sin(ang) * far }, COURT.rimZ + 1.2, 0.75);
         emit(g, "miss", side, g.lastShot?.timing === "miss" ? "BRICK!" : "MISS");
@@ -1085,7 +1222,7 @@ function passStep(g: Game, f: Flight, s: number) {
     }
   }
   if (f.oop) {
-    if (rec.act === "free" && (1 - s) * f.dur <= LIVE.dunkTime) startDunk(rec); // take off: at the top as it arrives
+    if (rec.act === "free" && (1 - s) * f.dur <= LIVE.dunkTime) startDunk(g, rec); // take off: at the top as it arrives
     if (s < 1) return;
     if (rec.act === "dunk") return gain(g, rec); // caught in the air: dunkStep slams it
     const ux = f.x1 - f.x0, uy = f.y1 - f.y0, len = Math.hypot(ux, uy) || 1; // nobody went up for it

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useLocation } from "react-router";
+import { isTouch } from "../touch.ts";
 
 export const DISCLAIMER =
   "Free fan project. Not affiliated with or endorsed by Nintendo, Game Freak, Creatures, or The Pokémon Company. Pokémon names and sprites belong to their respective owners.";
@@ -16,6 +18,25 @@ const read = () => {
  *  bring it back. */
 export function Footer() {
   const [small, setSmall] = useState(read);
+  const [peek, setPeek] = useState(false);
+  // a live game on a phone needs the whole screen (and its bottom corners for the thumbs): a small "i" up top-left,
+  // tap it for the disclaimer
+  const path = useLocation().pathname;
+  if (isTouch() && path === "/play/live") {
+    return peek ? (
+      <button className="fixed inset-x-2 top-2 z-50 border-2 border-slate bg-black px-3 py-2 text-center text-[18px] text-fog" onClick={() => setPeek(false)}>
+        {DISCLAIMER}
+      </button>
+    ) : (
+      <button
+        className="fixed left-[36px] top-[16px] z-50 flex h-[24px] w-[24px] items-center justify-center border-2 border-slate bg-black font-head text-[12px] text-fog"
+        onClick={() => setPeek(true)}
+        aria-label="Show the fan project disclaimer"
+      >
+        i
+      </button>
+    );
+  }
   const toggle = () => {
     const next = !small;
     setSmall(next);

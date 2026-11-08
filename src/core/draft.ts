@@ -1,9 +1,10 @@
-// The draft: 8 rounds. Each round deals one Pokémon from each tier (STAR, STARTER, ROLE, SLEEPER), all affordable
+// The ARCADE DRAFT: 8 rounds. Each round is a slot-machine pull: ARCADE.reels Pokémon, each from a tier drawn by
+// rarity (ARCADE.weights), with a STAR all but guaranteed (ARCADE.starChance; always on the first pull), all affordable
 // under the salary cap with room left to finish the team. Pick one and place it on any open roster spot; reroll a
 // round's offers a limited number of times. Seeded, so the same seed and the same picks always deal the same offers.
 // Pure: no React, no storage. Numbers live in ratingConfig.ts.
 import { chemistry, type Link } from "./chemistry.ts";
-import { DRAFT_DEPTH, DRAFT_GRADES, DRAFT_OFFERS, DRAFT_REROLLS, DRAFT_TIERS } from "./ratingConfig.ts";
+import { ARCADE, DRAFT_DEPTH, DRAFT_GRADES, DRAFT_REROLLS, DRAFT_TIERS } from "./ratingConfig.ts";
 import { budgetFor, emptyLineup, isEligible, salary, SLOTS, slotOvr, STARTERS, type Lineup, type Mode } from "./lineup.ts";
 import { makeRng } from "./rng.ts";
 import type { RatedPokemon } from "./types.ts";
@@ -40,9 +41,10 @@ export const dailySeed = (date = new Date()) => date.getFullYear() * 10000 + (da
 
 const stream = (d: Draft) => makeRng((d.seed ^ Math.imul(d.round + 1, 0x9e3779b1) ^ Math.imul(d.deals + 1, 0x85ebca6b)) >>> 0);
 
-/** Deal this round's offers: for each tier, a random pick from its DRAFT_DEPTH best (by best-position OVR) who are
- *  still free and affordable; a tier with nobody affordable gives way to the next cheaper tier. Every open spot
- *  has the same budget, so the first one stands for all. */
+/** One slot-machine pull: each reel lands on a tier drawn by rarity (among tiers with anyone free and affordable),
+ *  then a random one of that tier's DRAFT_DEPTH best. No STAR? Then with ARCADE.starChance (ARCADE.firstStar on the
+ *  first pull of the draft) one reel is swapped for an affordable STAR. Every open spot has the same budget, so the
+ *  first one stands for all. */
 function deal(d: Draft, pool: RatedPokemon[], dex: Dex): Offer[] {
   const rng = stream(d);
   const budget = budgetFor(toLineup(d), openSlots(d)[0], dex);
@@ -50,23 +52,27 @@ function deal(d: Draft, pool: RatedPokemon[], dex: Dex): Offer[] {
   const free = (p: RatedPokemon) =>
     isEligible(p, d.mode) && salary(p) <= budget && !d.ids.includes(p.id) && !offers.some((o) => o.id === p.id);
   const byBest = (a: RatedPokemon, b: RatedPokemon) => b.ovr[b.best] - a.ovr[a.best] || a.id - b.id;
+  // each tier's options, sorted once per pull; a Pokémon that lands is taken out of its list
+  const free0 = pool.filter(free);
+  const tiers = DRAFT_TIERS.map((t) => ({
+    tier: t.name as Tier,
+    options: free0.filter((p) => tierOf(p) === t.name).sort(byBest).slice(0, DRAFT_DEPTH),
+    w: Math.max(0, ARCADE.weights[t.name]),
+  }));
 
-  DRAFT_TIERS.forEach((_, start) => {
-    for (let t = start; t < DRAFT_TIERS.length; t++) {
-      const tier = DRAFT_TIERS[t].name;
-      const options = pool.filter((p) => tierOf(p) === tier && free(p)).sort(byBest).slice(0, DRAFT_DEPTH);
-      if (options.length) {
-        offers.push({ id: rng.pick(options).id, tier });
-        return;
-      }
-    }
-  });
-  while (offers.length < DRAFT_OFFERS) {
-    const options = pool.filter(free);
-    if (!options.length) break;
-    const p = rng.pick(options);
-    offers.push({ id: p.id, tier: tierOf(p) });
+  for (let reel = 0; reel < ARCADE.reels; reel++) {
+    const open = tiers.filter((t) => t.options.length && t.w > 0);
+    if (!open.length) break;
+    let roll = rng.next() * open.reduce((s, t) => s + t.w, 0);
+    const hit = open.find((t) => (roll -= t.w) < 0) ?? open[open.length - 1];
+    const id = rng.pick(hit.options).id;
+    offers.push({ id, tier: hit.tier });
+    hit.options = hit.options.filter((p) => p.id !== id);
   }
+  const stars = tiers[0].options; // STAR, minus any that already landed
+  const chance = d.round === 0 && d.deals === 0 ? ARCADE.firstStar : ARCADE.starChance;
+  if (offers.length && !offers.some((o) => o.tier === "STAR") && stars.length && rng.next() < chance)
+    offers[rng.int(offers.length)] = { id: rng.pick(stars).id, tier: "STAR" };
   return offers;
 }
 

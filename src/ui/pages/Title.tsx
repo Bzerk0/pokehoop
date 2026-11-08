@@ -12,6 +12,7 @@ import { Arrow } from "../components/Arrow.tsx";
 import { useRated } from "../data.ts";
 import { backBlip, coin, moveBlip, selectBlip } from "../sound.ts";
 import { PALETTE } from "../theme/palette.ts";
+import { useMusic } from "../bgm.ts";
 
 /** The title screen, arcade attract-mode style: a CPU game's big plays roll in the background through the replay
  *  cameras (LiveView's `attract` mode), the logo sits on top, and INSERT COIN blinks until you press a key; then the
@@ -21,6 +22,8 @@ export function Title() {
   const location = useLocation();
   // cabinet: the 3D arcade; coin: zoomed in on the screen, INSERT COIN; menu: the coin is in
   const [stage, setStage] = useState<"cabinet" | "coin" | "menu">(location.state?.menu ? "menu" : "cabinet");
+  // the title theme (muffled while you're looking at the cabinet from across the room), the menu music once in
+  useMusic(stage === "menu" ? "menu" : "title", stage === "cabinet");
   const [message, setMessage] = useState("");
   const [host, setHost] = useState<HTMLDivElement | null>(null); // the cabinet remounts the screen when it changes view
   const { data } = useRated();

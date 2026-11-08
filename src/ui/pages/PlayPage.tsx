@@ -20,6 +20,7 @@ import type { ArcadeSetup } from "./ArcadePage.tsx";
 import { inkOn, PALETTE } from "../theme/palette.ts";
 import { Arrow } from "../components/Arrow.tsx";
 import { CharacterSelect } from "../components/CharacterSelect.tsx";
+import { useMusic } from "../bgm.ts";
 
 type Dex = Map<number, RatedPokemon>;
 type Choice = { key: string; label: string; lineup: Lineup };
@@ -188,6 +189,7 @@ export function Results({ result, dex, mine }: { result: GameResult; dex: Dex; m
 
 /** /play: Pre-Game (pick your team and an opponent), then the result of a simmed game. */
 export function PlayPage() {
+  useMusic("menu");
   const navigate = useNavigate();
   const { data, error } = useRated();
   const dex = useMemo(() => (data ? dexOf(data) : null), [data]);
@@ -211,7 +213,7 @@ export function PlayPage() {
   const [oppSeed, setOppSeed] = useState(() => Date.now());
   const [result, setResult] = useState<GameResult | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [selecting, setSelecting] = useState<1 | 3 | 5 | "solo" | null>(null);
+  const [selecting, setSelecting] = useState<1 | 3 | 5 | "solo" | "half" | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -239,13 +241,13 @@ export function PlayPage() {
   };
 
   /** The live game, with the players you picked on the select screen (none picked: the five starters and bench). */
-  const live = (size: 1 | 3 | 5, tutorial = false, picks?: number[], solo = false, ids?: number[]) => {
+  const live = (size: 1 | 3 | 5, tutorial = false, picks?: number[], solo = false, ids?: number[], half = false) => {
     if (!mine || !cpu || !dex || !playable) return;
     const youColor = teamColor(mine.colors[0]);
     const cpuColor = teamColor(cpu.colors[0] === mine.colors[0] ? cpu.colors[1] : cpu.colors[0]);
     selectBlip();
     navigate("/play/live", {
-      state: { home: { ...mine, ids: ids ?? mine.ids, name: mine.name || "YOU" }, away: cpu, size, picks, solo, youColor, cpuColor, level, tutorial } satisfies ArcadeSetup,
+      state: { home: { ...mine, ids: ids ?? mine.ids, name: mine.name || "YOU" }, away: cpu, size, picks, solo, half, youColor, cpuColor, level, tutorial } satisfies ArcadeSetup,
     });
   };
 
@@ -302,7 +304,7 @@ export function PlayPage() {
       <div className="mx-auto max-w-[1200px] p-4">
         {header}
         <CharacterSelect
-          size={selecting === "solo" ? 1 : selecting}
+          size={selecting === "solo" || selecting === "half" ? 1 : selecting}
           solo={selecting === "solo"}
           teams={teams.map((t) => ({ ...t, ready: ready(t.lineup, dex) }))}
           team={pick}
@@ -312,9 +314,9 @@ export function PlayPage() {
             if (!ids) return live(5); // ENTIRE TEAM
             // the chosen Pokémon (from your team or the Pokédex) come first; the rest of your team is the bench.
             // SOLO: 5 on 5 as your one pick, with your team's first four starters (other than you) beside you
-            const size = selecting === "solo" ? 5 : selecting;
+            const size = selecting === "solo" ? 5 : selecting === "half" ? 1 : selecting;
             const ids8 = [...ids, ...mine.ids.filter((id): id is number => id != null && !ids.includes(id))].slice(0, 8);
-            live(size, false, ids8.slice(0, size).map((_, i) => i), selecting === "solo", ids8);
+            live(size, false, ids8.slice(0, size).map((_, i) => i), selecting === "solo", ids8, selecting === "half");
           }}
           onBack={() => setSelecting(null)}
         />
@@ -327,6 +329,7 @@ export function PlayPage() {
     [3, "THREES", "3 on 3, a full timed game"],
     [5, "FIVES", "5 on 5, the real thing"],
     ["solo", "SOLO", "5 on 5 as one Pokémon (test)"],
+    ["half", "HALF 1V1", "Half-court 1 on 1, streetball (test)"],
   ] as const;
 
   return (
@@ -369,7 +372,7 @@ export function PlayPage() {
       </div>
 
       <h2 className="mb-2 mt-5 text-center font-head text-[16px] text-gold">PLAY LIVE</h2>
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-5">
         {modes.map(([size, name, blurb]) => (
           <button key={size} className="px-btn flex flex-col items-center gap-2 !py-4" onClick={() => (selectBlip(), setSelecting(size))} disabled={!playable}>
             <span className="font-head text-[24px] leading-[32px]">{name} <Arrow /></span>

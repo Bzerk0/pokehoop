@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import { makeAi, makeCoach, type AiLevel } from "../core/live/ai.ts";
 import {
-  callPlay, callScheme, COURT, energyOf, facedTeammate, handlerOf, handZ, lineupGame, liveResult, meterWindow, NO_INPUT, reachOf, step,
+  callPlay, callScheme, COURT, dist, energyOf, facedTeammate, hoopOf, handlerOf, handZ, lineupGame, liveResult, meterWindow, NO_INPUT, reachOf, step,
   subIn, type Game, type GameEvent, type Input, type Player,
 } from "../core/live/game.ts";
 import { PLAY, PLAYS, SCHEME_ABOUT, SCHEMES, type PlayName, type SchemeName } from "../core/live/plays.ts";
@@ -16,8 +16,9 @@ import type { Lineup } from "../core/lineup.ts";
 import type { GameResult } from "../core/sim/sim.ts";
 import { clock as clockText } from "../core/stats.ts";
 import type { RatedPokemon } from "../core/types.ts";
-import { blip, boom, fanfare, swoosh, womp } from "../ui/sound.ts";
-import { cameraFor, ClipSpotter, frameAt, Recorder, replaySpeed, snap, type Clip, type Snap } from "./replay.ts";
+import { blip, boom, fanfare, jingle, swoosh, womp } from "../ui/sound.ts";
+import { isTouch } from "../ui/touch.ts";
+import { isSpecialDunk, cameraFor, ClipSpotter, frameAt, Recorder, replaySpeed, snap, type Clip, type Snap } from "./replay.ts";
 import { Music } from "./music.ts";
 import { STEPS, Tutorial } from "./tutorial.ts";
 import { ACTIONS, codesFor, keyName, loadKeys, type Action, type KeyMap } from "./keys.ts";
@@ -32,6 +33,8 @@ export type LiveSetup = {
   picks?: number[];
   /** One-character mode: you only play as your P1 (passing doesn't switch), and call a play every possession. */
   solo?: boolean;
+  /** Half-court 1v1: both attack the far hoop; take it back after a stop, check it after a make. */
+  half?: boolean;
   dex: Map<number, RatedPokemon>;
   youColor: PaletteName;
   cpuColor: PaletteName;
@@ -88,6 +91,14 @@ function paint(w: number, h: number, draw: (px: (x: number, y: number, c: Palett
   return c;
 }
 
+/** The on-screen buttons' names (touch controls), for the tutorial's {action} placeholders. */
+const TOUCH_NAME: Record<Action, string> = {
+  up: "UP", down: "DOWN", left: "LEFT", right: "RIGHT", turbo: "TURBO", shoot: "SHOOT", pass: "PASS", plays: "PLAYS", music: "M",
+};
+
+/** The key cap for a double tap of a key: LL for a letter, SHIFTx2 for a long name. */
+const doubleCap = (k: string) => (k.length === 1 ? k + k : `${k}x2`);
+
 export class LiveView {
   private g: Game;
   private brains: ReturnType<typeof makeAi>[]; // one per player; yours is skipped while you steer it
@@ -111,6 +122,10 @@ export class LiveView {
   private textures = new Map<string, THREE.Texture>();
   private loader = new THREE.TextureLoader();
   private music = new Music();
+  private lastRelease = ""; // the last shot's release text (DUNK, LAYUP...), for the jingle when it drops
+  private specialDunk = false;
+  private touch = isTouch(); // on a phone: the on-screen buttons' names instead of keys (TouchControls)
+  private lastShooter: number | undefined; // who let the last shot go (a missed dunk's NO GOOD! goes over them) // the dunk in the air is a special one (360, windmill...): a bigger jingle
   private shadows: THREE.Mesh[] = [];
   private ring!: THREE.Mesh;
   private manRing!: THREE.Mesh;
@@ -163,8 +178,16 @@ export class LiveView {
   private rlook = new THREE.Vector3();
   private replayFlashUntil = 0;
   // a live cinematic: the dunk camera cutting in while the dunk really happens (the game itself goes slow-mo)
-  private cine: { clip: Clip; cut: number } | null = null;
+  private cine: { clip: Clip; cut: number; landedAt?: number } | null = null;
   private cineKey = -Infinity; // when the last live-filmed slam lands (so it isn't replayed again)
+  private cineShown: { who: number; t: number }[] = []; // who each live cut followed, and when (no replay of those)
+  private manBurst!: THREE.Mesh; // the red ring rippling out from under your man (SOLO)
+  private manSince = -1; // when your man's ring last came up (-1: not up)
+  private manIntro = true; // the first defensive trip: YOUR MAN over their head
+  private oopWait: { who: number; until: number } | null = null; // an oop lob in the air: cut live when it's caught
+  private manNow = -1; // your man (SOLO, on defence), for the YOUR MAN marker
+  private lastAttractKind = ""; // the title screen's last clip kind (it tries not to show the same twice running)
+  private attractSkips = 0;
   private lastActs: string[] = [];
   private cineCaption: { text: string; color: PaletteName; at: number } | null = null; // BIG BLOCK! over a live cinematic
   private ticks = { shot: 99, clock: 99 }; // the last second each clock ticked on (the countdown beeps)
@@ -187,7 +210,7 @@ export class LiveView {
   constructor(private host: HTMLElement, private d: LiveSetup) {
     W = COURT.w;
     L = COURT.l;
-    this.g = lineupGame(d.home, d.away, d.dex, d.tutorial ? 3 : d.size, d.seed, !!d.tutorial, d.tutorial ? undefined : d.picks);
+    this.g = lineupGame(d.home, d.away, d.dex, d.tutorial ? 3 : d.size, d.seed, !!d.tutorial, d.tutorial ? undefined : d.picks, !!d.half && !d.tutorial && d.size === 1);
     this.g.solo = !!d.solo && !d.tutorial && this.g.size > 1;
     this.tutor = d.tutorial ? new Tutorial(this.g) : null;
     this.crowd = d.crowd ?? CROWD;
@@ -234,6 +257,11 @@ export class LiveView {
   }
   setAutoSub(on: boolean) {
     this.g.autoSub[0] = on;
+  }
+  /** You've got the ball close enough to the rim to dunk (the touch controls' SHOOT says DUNK). */
+  get nearRim() {
+    const g = this.g, me = g.players[g.control];
+    return this.started && !this.ended && g.ball.holder === me.i && !g.ball.flight && dist(me, hoopOf(me.side)) < LIVE.dunkRange;
   }
   get canSimRest() {
     return canSimRest(this.g);
@@ -285,41 +313,27 @@ export class LiveView {
   /** Re-read the key map (after the CONTROLS screen) and the set of keys the game listens to. */
   reloadKeys() {
     this.keys = loadKeys();
-    this.gameKeys = new Set([...ACTIONS.flatMap((a) => codesFor(this.keys, a)), "KeyL", "Enter", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5"]);
+    this.gameKeys = new Set([...ACTIONS.flatMap((a) => codesFor(this.keys, a)), "Enter", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5"]);
   }
   /** Is any key for this action held / just pressed? */
-  /** TEST (LIVE.sprintOnL): L is sprint, and a double tap of L is the crossover / steal. */
-  private lSprint = () => LIVE.sprintOnL >= 1;
-  private codes = (a: Action) => {
-    const list = codesFor(this.keys, a);
-    if (!this.lSprint()) return list;
-    if (a === "turbo") return [...list, "KeyL"];
-    if (a === "cross") return list.filter((c) => c !== "KeyL");
-    return list;
-  };
+  private codes = (a: Action) => codesFor(this.keys, a);
   private act = (a: Action) => this.down(...this.codes(a));
-  private tap = (a: Action) => this.codes(a).some((c) => this.tapped.has(c)) || (a === "cross" && this.doubleTapped);
+  private tap = (a: Action) => this.codes(a).some((c) => this.tapped.has(c));
   private onDown = (e: KeyboardEvent) => {
     if (this.paused || !this.gameKeys.has(e.code)) return;
     e.preventDefault(); // no page scrolling on arrows/space
     if (!e.repeat) this.tapped.add(e.code);
-    if (!e.repeat && this.codes("turbo").includes(e.code)) this.turboDownAt = performance.now();
-    if (!e.repeat && e.code === "KeyL" && this.lSprint()) {
+    if (!e.repeat && this.codes("turbo").includes(e.code)) {
+      // two presses of sprint close together: the crossover (with the ball) or a steal
       const t = performance.now();
-      if (t - this.lastL < LIVE.doubleTap * 1000) (this.doubleTapped = true), (this.lastL = 0);
-      else this.lastL = t;
+      if (t - this.lastSprint < LIVE.doubleTap * 1000) (this.doubleTapped = true), (this.lastSprint = 0);
+      else this.lastSprint = t;
     }
     this.held.add(e.code);
   };
-  private onUp = (e: KeyboardEvent) => {
-    this.held.delete(e.code);
-    // a quick tap of sprint (not a hold) counts as a crossover tap
-    if (!this.lSprint() && codesFor(this.keys, "turbo").includes(e.code) && performance.now() - this.turboDownAt < LIVE.sprintTap * 1000) this.sprintTapped = true;
-  };
-  private lastL = 0;
+  private onUp = (e: KeyboardEvent) => this.held.delete(e.code);
+  private lastSprint = 0;
   private doubleTapped = false;
-  private turboDownAt = 0;
-  private sprintTapped = false;
   private onBlur = () => this.held.clear();
   /** A hidden tab freezes the game (and starves the music's timer), so the music waits too. */
   private onVisibility = () => {
@@ -480,6 +494,10 @@ export class LiveView {
     this.manRing.rotation.x = -Math.PI / 2;
     this.manRing.visible = false;
     s.add(this.manRing);
+    this.manBurst = new THREE.Mesh(this.keep(new THREE.RingGeometry(0.5, 0.75, 20)), this.keep(basic("red", { transparent: true, depthWrite: false })));
+    this.manBurst.rotation.x = -Math.PI / 2;
+    this.manBurst.visible = false;
+    s.add(this.manBurst);
     this.burst = new THREE.Mesh(this.keep(new THREE.RingGeometry(0.5, 0.75, 20)), this.keep(basic("gold", { transparent: true, depthWrite: false })));
     this.burst.rotation.x = -Math.PI / 2;
     this.burst.visible = false;
@@ -764,7 +782,6 @@ export class LiveView {
       // a replay: the game waits while the clip plays
       this.runReplay(dt, now);
       this.tapped.clear();
-      this.sprintTapped = false;
       this.doubleTapped = false;
       this.draw(dt, now);
       return;
@@ -789,10 +806,9 @@ export class LiveView {
         turbo: this.act("turbo"),
         shoot: this.act("shoot") && !this.holdFromStart,
         steal: this.tap("pass"),
-        // L, or a quick tap of sprint with the ball (on defence a sprint tap does nothing: L there is the steal)
-        cross: this.tap("cross") || (this.sprintTapped && handlerOf(this.g) === steering),
+        cross: this.doubleTapped, // a double tap of sprint: the crossover with the ball, a steal without
         passTo: digit != null && digit <= this.g.size ? digit - 1 : null,
-        screen: false,
+        screen: this.act("left") && this.act("right"), // hold left and right together: plant a screen
       };
       this.acc += dt * (this.menu ? LIVE.menuSlow : 1) * (this.cine ? replaySpeed(this.cine.clip, this.g.time) : 1); // slower in the menu, and at a live slam
       let first = true;
@@ -810,13 +826,18 @@ export class LiveView {
           this.rec.push(g);
           for (const e of g.events) {
             const clip = this.spotter.spot(e, g);
-            if (clip) this.pendingClips.push(clip);
+            if (clip) {
+              clip.poss = clip.kind === "block" || clip.kind === "chase" ? clip.side : g.poss; // the same object: the spotter may stretch it
+              this.pendingClips.push(clip);
+            }
           }
         }
         first = false;
         for (const e of g.events) this.onEvent(e, now);
         if (!this.tutor) this.watchForCine(now);
         frameEvents.push(...g.events);
+        // the soundtrack follows the ball: the game song with it, the tense defence song without
+        if (g.ball.holder != null) this.music.setSong(g.players[g.ball.holder].side === 0 ? "game" : "defence");
         if (g.over) break;
       }
       if (!this.tutor) this.checkClips();
@@ -847,7 +868,6 @@ export class LiveView {
       this.popups.push({ text: on ? "MUSIC ON" : "MUSIC OFF", color: "cloud", until: now + 800, big: true });
     }
     this.tapped.clear();
-    this.sprintTapped = false;
     this.doubleTapped = false;
     this.draw(dt, now);
   };
@@ -924,24 +944,36 @@ export class LiveView {
       this.cheer(); // every big-text moment gets the crowd up
     };
     if (e.kind === "release" && e.text === "DUNK") this.cheer();
+    const sting = (sec: number) => this.music.duck(sec + 0.1); // a jingle: the music dips under it
     switch (e.kind) {
       case "make":
-        blip(e.text === "THREE!" ? 1568 : 1320, 110);
+        sting(this.lastRelease === "DUNK" ? (this.specialDunk ? jingle.special(mine) : jingle.dunk(mine)) : e.text === "THREE!" ? jingle.three(mine) : jingle.make(mine));
+        this.specialDunk = false;
         pop(e.text);
         if (e.text === "THREE!") this.impactAt = { x: W / 2, y: e.side === 0 ? L - COURT.hoopIn : COURT.hoopIn, z: COURT.rimZ, t: now }; // a ring off the net
         break;
       case "miss":
-        blip(196, 110);
+        sting(e.text === "AIR BALL!" || this.g.lastShot?.zone === "three" || this.lastRelease === "DUNK" ? jingle.missThree() : jingle.miss());
+        if (this.lastRelease === "DUNK") {
+          // a dunk that didn't go: big over a live cut, a little call over the dunker's head otherwise
+          const lines = ["NO GOOOD!", "IN AND OUT!", "RIMMED OUT!", "OFF THE IRON!", "CLANK!"];
+          const text = lines[Math.floor(Math.random() * lines.length)];
+          const cut = this.cine && (this.cine.clip.kind === "dunk" || this.cine.clip.kind === "special");
+          if (cut) this.shout([text], e.side, now, false);
+          else this.popups.push({ text, color: "red", until: now + 1000, who: this.lastShooter, big: false });
+        }
+        this.specialDunk = false;
         if (e.text === "AIR BALL!") this.popups.push({ text: e.text, color: "cloud", until: now + 900, big: true });
         break;
       case "block":
-        blip(140, 180, 0.07);
+        sting(jingle.block());
+        this.specialDunk = false;
         this.shake = 0.25;
         pop(e.text);
         this.impactAt = { x: this.g.ball.x, y: this.g.ball.y, z: this.g.ball.z, t: now }; // a shockwave off the swat
         break;
       case "steal": {
-        blip(1046, 90);
+        sting(jingle.steal());
         pop(e.text);
         const thief = e.who != null ? this.g.players[e.who] : null;
         if (thief) this.dustAt = { x: thief.x, y: thief.y, t: now }; // a puff where they ripped it
@@ -951,12 +983,18 @@ export class LiveView {
         blip(1175, 80);
         pop(e.text);
         break;
-      case "move": // a step-back: a little call over the ball handler
-        blip(784, 40, 0.04);
+      case "move": // a step-back, a eurostep, an oop, a special dunk: a little call over the player
+        if (e.text === "ALLEY-OOP!") sting(jingle.oop());
+        else if (e.text === "EUROSTEP") sting(jingle.flourish());
+        else if (/DUNK!|WINDMILL!|TOMAHAWK!|EASTBAY!/.test(e.text)) (this.specialDunk = true), blip(784, 40, 0.04);
+        else blip(784, 40, 0.04);
         this.popups.push({ text: e.text, color: e.text === "DOUBLE JUMP" ? "sky" : "cloud", until: now + 700, who: e.who, big: false });
         break;
       case "release": {
+        this.lastRelease = e.text;
+        this.lastShooter = e.who;
         if (e.text === "PERFECT") blip(1760, 50);
+        if (e.text === "FLOATER") sting(jingle.flourish());
         if (e.text === "DUNK") this.shake = 0.3;
         if (!mine && e.text !== "DUNK" && e.text !== "LAYUP") break;
         const color: PaletteName = e.text === "PERFECT" ? "lime" : ["GOOD", "DUNK", "LAYUP"].includes(e.text) ? "gold" : e.text === "QUICK" ? "cloud" : "red";
@@ -982,7 +1020,7 @@ export class LiveView {
         break;
       case "fire":
         // a rising arpeggio, a shake, the crowd on its feet
-        [523, 659, 784, 1047].forEach((f, k) => setTimeout(() => blip(f, 70, 0.06), k * 70));
+        sting(jingle.fire());
         this.shake = 0.3;
         pop(e.text, 1500);
         break;
@@ -1091,6 +1129,18 @@ export class LiveView {
     const man = g.solo && theirBall ? g.players.find((q) => q.side === 1 && q.slot === you.slot) : undefined;
     this.manRing.visible = !!man && !this.cinematic;
     if (man) this.manRing.position.copy(at(man.x, man.y, 0.03));
+    // your man's ring ripples out like the switch flash each time it comes up; the first time, YOUR MAN too
+    if (man && this.manSince < 0) this.manSince = now;
+    if (!man && this.manSince >= 0) (this.manSince = -1), (this.manIntro = false);
+    const mw = man ? (now - this.manSince) / SWITCH_FLASH : 1;
+    this.manBurst.visible = !!man && mw < 1 && !this.cinematic;
+    if (man && mw < 1) {
+      this.manBurst.position.copy(at(man.x, man.y, 0.035));
+      this.manBurst.scale.setScalar(1 + mw * 5);
+      (this.manBurst.material as THREE.MeshBasicMaterial).opacity = 1 - mw;
+      this.manRing.scale.setScalar(1.6 - mw * 0.6); // and the ring itself pops
+    } else this.manRing.scale.setScalar(1);
+    this.manNow = man ? man.i : -1;
 
     // the ball: dribbled at the side, held up to shoot, or flying
     const b = g.ball;
@@ -1103,8 +1153,10 @@ export class LiveView {
         bz = 0.15 + Math.abs(Math.sin(t * 9)) * 0.85;
       }
     }
-    this.ball.position.copy(at(bx, b.y, bz + 0.22));
-    this.drawBallFire(bx, b.y, bz + 0.22, now);
+    let by = b.y;
+    if (this.cinematic && b.holder != null && !b.flight) [bx, by, bz] = this.specialBall(g.players[b.holder], bx, by, bz);
+    this.ball.position.copy(at(bx, by, bz + 0.22));
+    this.drawBallFire(bx, by, bz + 0.22, now);
     this.ballShadow.position.copy(at(bx, b.y, 0.025));
 
     this.drawReplayFx(now);
@@ -1132,15 +1184,18 @@ export class LiveView {
       this.topClips.push(c);
       this.topClips.sort((a, b) => b.hype - a.hype || b.start - a.start);
       this.topClips.length = Math.min(this.topClips.length, 5);
-      const shownLive = Math.abs(c.keys[c.keys.length - 1] - this.cineKey) < 1; // already seen it live
+      const shownLive = Math.abs(c.keys[c.keys.length - 1] - this.cineKey) < 1 // already seen it live
+        || this.cineShown.some((v) => v.who === c.who && v.t >= c.start && v.t <= c.end);
       if (LIVE.replays >= 1 && !shownLive && c.hype >= LIVE.replayMin && (!this.waitingClip || c.hype > this.waitingClip.hype)) this.waitingClip = c;
     }
     const w = this.waitingClip;
     if (!w || g.over) return;
     if (g.time - w.end > 8) return void (this.waitingClip = null); // too long ago now
+    if (w.poss != null && g.poss !== w.poss) return void (this.waitingClip = null); // the ball's changed hands: that's history
     // made baskets are at a stoppage already; live-ball plays (ankles, blocks) wait for the next one
     const stoppage = g.dead > 0 || w.kind === "dunk" || w.kind === "stepback" || w.kind === "shot";
     if (!stoppage || g.time - this.lastReplayAt < LIVE.replayGap) return;
+    if (this.cine || g.ball.flight) return; // not over a live cut, and never with a shot still in the air
     this.waitingClip = null;
     this.lastReplayAt = g.time;
     this.startReplay(w, "REPLAY", false);
@@ -1148,6 +1203,7 @@ export class LiveView {
 
   private startReplay(clip: Clip, label: string, reel: boolean) {
     this.replay = { clip, t: clip.frames[0].t, hold: 0, cut: -1, hit: 0, label, saved: snap(this.g), reel, began: performance.now() };
+    this.cineCaption = clip.title.startsWith("BUZZER") ? { text: "IS THIS THE DAGGER?!", color: clip.side === 0 ? "gold" : "red", at: performance.now() } : null;
     this.setReplayLook(true);
     if (!this.d.attract) swoosh();
   }
@@ -1174,7 +1230,16 @@ export class LiveView {
       if (!done) continue;
       this.pendingClips = this.pendingClips.filter((c) => c !== done);
       done.frames = this.rec.between(done.start, Math.min(done.end, g.time));
-      if (done.frames.length >= 20) this.startReplay(done, "", false);
+      // not the same kind of play twice running, if another comes along soon (two skips at most)
+      if (done.kind === this.lastAttractKind && this.attractSkips < 2) {
+        this.attractSkips++;
+        continue;
+      }
+      if (done.frames.length >= 20) {
+        this.lastAttractKind = done.kind;
+        this.attractSkips = 0;
+        this.startReplay(done, "", false);
+      }
     }
   }
 
@@ -1206,7 +1271,9 @@ export class LiveView {
   /** Put the players and ball where a snapshot has them (the game itself is paused). */
   private applySnap(s: Snap) {
     const g = this.g;
-    s.players.forEach((q, i) => Object.assign(g.players[i], { x: q.x, y: q.y, z: q.z, vx: q.vx, vy: q.vy, act: q.act, onFire: q.onFire, p: q.p }));
+    s.players.forEach((q, i) => Object.assign(g.players[i], {
+      x: q.x, y: q.y, z: q.z, vx: q.vx, vy: q.vy, act: q.act, onFire: q.onFire, p: q.p, dunkStyle: q.dunkStyle, euro: q.euro,
+    }));
     Object.assign(g.ball, { x: s.ball.x, y: s.ball.y, z: s.ball.z, holder: s.ball.holder, flight: s.ball.flight });
   }
 
@@ -1235,7 +1302,18 @@ export class LiveView {
   private replayImpact(c: Clip, k: number, now: number) {
     const s = c.frames.length ? frameAt(c.frames, c.keys[k]) : snap(this.g), star = s.players[c.who], b = s.ball; // live: right now
     const sfx = (play: () => void) => this.d.attract || play(); // the title screen's clips are silent
-    if (c.kind === "dunk") {
+    const say = (lines: string[]) => this.shout(lines, c.side, now, false);
+    const last = k === c.keys.length - 1;
+    if (c.kind === "special" && last) say([c.title.replace(/^BUZZER-BEATER! /, "")]);
+    else if (c.kind === "dunk" && last) say(c.title.includes("OOP") ? ["ALLEY-OOP!", "OOP!"] : ["SLAM!", "BOOM!", "JAM!", "POSTERIZED!"]);
+    else if (c.kind === "stepback") say(k === 0 ? ["STEP-BACK!", "STEPBACK!", "CREATING SPACE!"] : ["SPLASH!", "CASH!", "BANG!"]);
+    else if (c.kind === "eurostep" && k === 0) say(["EUROSTEP!", "EURO!"]);
+    else if (c.kind === "floater" && last) say(["FLOATER!", "TEARDROP!"]);
+    else if (c.kind === "ankles") say(k === 0 ? ["ANKLES!", "BROKEN!", "HE FELL!", "TIMBER!"] : ["AND THE BUCKET!", "COOKED!"]);
+    else if ((c.kind === "block" || c.kind === "chase") && last) say(c.kind === "chase" ? ["CHASE-DOWN!", "FROM BEHIND!"] : ["REJECTED!", "DENIED!", "NOT IN HERE!"]);
+    else if (c.kind === "perimeter" && last) say(["SWING, SWING... BANG!"]);
+    else if (c.kind === "shot" && last) say(["AT THE BUZZER!", "GAME!", "ICE COLD!"]);
+    if (c.kind === "dunk" || c.kind === "special") {
       const end = c.side === 0 ? 1 : 0;
       sfx(boom);
       this.shake = 0.45;
@@ -1247,13 +1325,23 @@ export class LiveView {
       this.shake = 0.3;
       this.replayFlashUntil = now + 60;
       this.impactAt = { x: b.x, y: b.y, z: b.z, t: now };
-    } else if (c.kind === "ankles") {
+    } else if (c.kind === "ankles" && k === 0) {
       const v = c.vs != null ? s.players[c.vs] : star;
       sfx(() => blip(220, 90, 0.08));
       this.dustAt = { x: v.x, y: v.y, t: now };
-    } else if (c.kind === "stepback" && k === 0) {
+    } else if ((c.kind === "stepback" && k === 0) || (c.kind === "eurostep" && k < 2)) {
+      // the step-back's plant, each of the eurostep's two plants: a scuff and a puff of dust
       sfx(() => blip(330, 50, 0.06));
       this.dustAt = { x: star.x, y: star.y, t: now };
+    } else if (c.kind === "screen" && k === 0) {
+      // the pick: a flash and dust where the defender runs into the screener, and PICK!
+      const v = c.vs != null ? s.players[c.vs] : star;
+      sfx(() => blip(150, 90, 0.1));
+      this.shake = 0.15;
+      this.replayFlashUntil = now + 50;
+      this.dustAt = { x: v.x, y: v.y, t: now };
+      this.impactAt = { x: v.x, y: v.y, z: 1, t: now };
+      this.cineCaption = { text: "PICK!", color: c.side === 0 ? "gold" : "red", at: now };
     } else sfx(() => blip(1320, 70, 0.05)); // the swish
   }
 
@@ -1273,7 +1361,14 @@ export class LiveView {
     if (c) {
       const star = g.players[c.clip.who];
       for (const e of g.events) {
-        if (e.kind === "make" && e.who === c.clip.who) this.replayImpact(c.clip, c.clip.keys.length - 1, now);
+        if (e.kind === "make" && e.who === c.clip.who) {
+          if (c.clip.kind === "eurostep" || c.clip.kind === "floater") blip(1320, 70, 0.05); // the swish (not another plant)
+          else this.replayImpact(c.clip, c.clip.keys.length - 1, now);
+          const side = c.clip.side;
+          if (c.clip.kind === "dunk") this.shout(["SLAM!", "BOOM!", "JAM!", "POSTERIZED!", "HAMMER TIME!"], side, now);
+          if (c.clip.kind === "stepback") this.shout(["SPLASH!", "CASH!", "BANG!"], side, now); // the corner three
+          if (c.clip.kind === "eurostep" || c.clip.kind === "floater") this.shout(["AND IT'S GOOD!", "SO SMOOTH!", "BUCKETS!"], side, now);
+        }
         if (e.kind === "block" && e.vs === c.clip.who && e.who != null) {
           // stuffed! hold the shot a beat longer and shout about it; the slow motion moves to the block
           this.bigBlock(e.who, now);
@@ -1281,11 +1376,25 @@ export class LiveView {
           c.clip.keys = [g.time];
         }
       }
-      const landed = c.clip.kind === "dunk" && !this.cineBlocked && star.act !== "dunk" && star.z === 0 && g.time > c.clip.keys[0];
-      if (g.time > c.clip.end || landed || g.over) this.endCine();
-    } else if (LIVE.liveCine >= 1 && !g.over && g.time - this.lastCineAt >= LIVE.cineGap) {
+      const slam = c.clip.kind === "dunk" || c.clip.kind === "special";
+      const landed = slam && !this.cineBlocked && star.act !== "dunk" && star.z === 0 && g.time > c.clip.keys[0];
+      // after the landing, hold the shot a beat (the hang, the crowd), then cut back
+      if (landed) c.clip.end = Math.min(c.clip.end, (c.landedAt ??= g.time) + LIVE.cineHold);
+      if (g.time > c.clip.end || g.over) this.endCine();
+    }
+    // an alley-oop: the pass plays out in the normal view; the cut waits for the catch
+    const lob = g.events.find((e) => e.text === "ALLEY-OOP!" && e.who != null);
+    if (lob && g.ball.flight?.oop) this.oopWait = { who: lob.who!, until: g.time + g.ball.flight.dur + 0.5 };
+    if (this.oopWait && g.time > this.oopWait.until) this.oopWait = null;
+    const on = LIVE.cineShots;
+    if (c) {
+      // (filming already)
+    } else if (LIVE.liveCine >= 1 && !g.over && (g.time - this.lastCineAt >= LIVE.cineGap || (on.special >= 1 && g.events.some((e) => isSpecialDunk(e.text))))) {
+      // (a special dunk is rare enough to cut to whenever it happens)
       const go = (kind: Clip["kind"], who: number, keys: number[], end: number, vs?: number) => {
         this.cineKey = keys[keys.length - 1];
+        this.cineShown.push({ who, t: g.time });
+        if (this.cineShown.length > 8) this.cineShown.shift();
         this.cineBlocked = false;
         this.cineCaption = null;
         this.cine = { clip: { kind, title: "", who, vs, side: g.players[who].side, start: g.time - 0.6, end, keys, hype: 0, frames: [] }, cut: -1 };
@@ -1293,22 +1402,44 @@ export class LiveView {
         swoosh();
       };
       const f = g.ball.flight;
-      const oop = g.events.find((e) => e.text === "ALLEY-OOP!" && e.who != null);
       const block = g.events.find((e) => e.kind === "block" && e.who != null);
-      const dunker = g.players.find((pl) => pl.act === "dunk" && this.lastActs[pl.i] !== "dunk" && pl.p.attrs.finishing >= 70);
-      if (oop && f?.oop) {
-        // the lob's in the air: follow the receiver up, then the slam from under the rim
-        const key = g.time + (f.dur - f.t) + LIVE.dunkSlamTime + 0.02;
-        go("dunk", oop.who!, [key], key + 1);
-      } else if (dunker) {
+      // (a dunker with the ball: an oop receiver takes off before the catch, and that cut waits for the catch)
+      const dunker = g.players.find((pl) => pl.act === "dunk" && this.lastActs[pl.i] !== "dunk" && pl.p.attrs.finishing >= 70 && g.ball.holder === pl.i && !g.ball.flight);
+      // the oop: the lob plays in the normal view; the cut comes in just before the catch, for the catch and the slam
+      const lobLeft = f?.oop ? f.dur - f.t : Infinity;
+      const caught = this.oopWait && f?.oop && f.to === this.oopWait.who && lobLeft <= LIVE.oopCut ? this.oopWait.who : null;
+      const special = g.events.find((e) => e.kind === "move" && e.who != null && isSpecialDunk(e.text));
+      const euro = g.events.find((e) => e.kind === "move" && e.text === "EUROSTEP" && e.who != null);
+      const floater = g.events.find((e) => e.kind === "release" && e.text === "FLOATER" && e.who != null);
+      if (caught != null) this.oopWait = null;
+      if (special && dunker && dunker.i === special.who && on.special >= 1) {
+        // a 360, a windmill...: the low, close dunk camera, longer slow motion, and its name in lights
+        const key = g.time + LIVE.dunkTime + 0.12;
+        go("special", dunker.i, [key], key + 1.2);
+        this.cineCaption = { text: special.text, color: dunker.side === 0 ? "gold" : "red", at: now };
+      } else if (caught != null && on.oop >= 1) {
+        // just before the catch at the top of the leap: the catch, then the slam from under the rim
+        const key = g.time + lobLeft + LIVE.dunkSlamTime + 0.02;
+        go("dunk", caught, [key], key + 1.5);
+        this.shout(["ALLEY-OOP!", "OOP!", "FROM THE SKY!"], g.players[caught].side, now);
+      } else if (dunker && on.dunk >= 1) {
         const key = g.time + LIVE.dunkTime + 0.12; // when the ball goes through
         go("dunk", dunker.i, [key], key + 1);
-      } else if (block) {
+      } else if (block && on.block >= 1) {
         go(block.text.startsWith("CHASE") ? "chase" : "block", block.who!, [g.time], g.time + 1, block.vs);
         this.bigBlock(block.who!, now);
-      } else if (f?.kind === "shot" && f.points === 3 && f.t <= DT * 1.5 && this.cornerThree(f)) {
+      } else if (euro && on.eurostep >= 1) {
+        // low in front for the two plants (slow-mo on each), then the finish
+        go("eurostep", euro.who!, [g.time, g.time + LIVE.euroTime / 2], g.time + 1.8, euro.vs);
+        this.shout(["EUROSTEP!", "EURO!", "SIDE TO SIDE!"], g.players[euro.who!].side, now);
+      } else if (floater && f?.kind === "shot" && on.floater >= 1) {
+        go("floater", floater.who!, [g.time, g.time + f.dur], g.time + f.dur + 0.8);
+        this.shout(["FLOATER!", "TEARDROP!", "UP AND OVER!"], g.players[floater.who!].side, now);
+      } else if (on.corner >= 1 && f?.kind === "shot" && f.points === 3 && f.t <= DT * 1.5 && this.cornerThree(f)) {
         // from the corner: over the defender's shoulder, riding the ball, then the swish from behind the board
         go("stepback", f.by, [g.time, g.time + f.dur], g.time + f.dur + 0.9);
+        this.cine!.clip.ease = LIVE.cornerEase; // full slow-mo as it leaves the hand, speeding up as it flies
+        this.shout(["FROM THE CORNER!", "CORNER THREE..."], g.players[f.by].side, now);
       }
     }
     this.lastActs = g.players.map((p) => p.act);
@@ -1318,6 +1449,14 @@ export class LiveView {
   private cornerThree(f: { x0: number; y0: number; by: number }) {
     const hoop = this.g.players[f.by].side === 0 ? { x: W / 2, y: L - COURT.hoopIn } : { x: W / 2, y: COURT.hoopIn };
     return Math.abs(f.x0 - hoop.x) > COURT.corner - 0.4 && Math.abs(f.y0 - hoop.y) < Math.sqrt(COURT.three ** 2 - COURT.corner ** 2) + 0.6;
+  }
+
+  /** A big shout over a cinematic (one of `lines`, in the team's colour). Near the end of a quarter, the shot that
+   *  might win it gets the question instead. */
+  private shout(lines: string[], side: number, now: number, live = true) {
+    const g = this.g, late = live && g.timed && g.clock < 3 && !!g.ball.flight && g.ball.flight.kind === "shot";
+    const text = late ? "IS THIS THE DAGGER?!" : lines[Math.floor(Math.random() * lines.length)];
+    this.cineCaption = { text, color: side === 0 ? "gold" : "red", at: now };
   }
 
   /** Stuffed! A shake, a flash, a shockwave off the ball, and a big caption over the live cut. */
@@ -1336,8 +1475,10 @@ export class LiveView {
   /** The ball on fire while it's being slammed or lobbed for an alley-oop, leaving a trail of flame behind it. */
   private drawBallFire(x: number, y: number, z: number, now: number) {
     const g = this.g, b = g.ball, h = b.holder != null && !b.flight ? g.players[b.holder] : null;
-    const lit = (h?.act === "dunk") || (b.flight?.kind === "shot" && b.flight.dur < 0.2) || !!b.flight?.oop;
-    this.ballFire.visible = lit;
+    const floater = this.filming?.clip.kind === "floater" && b.flight?.kind === "shot";
+    const lit = (h?.act === "dunk") || (b.flight?.kind === "shot" && b.flight.dur < 0.2) || !!b.flight?.oop || floater;
+    this.ballFire.visible = lit && !floater; // a floater gets sparkles, no flame
+    for (const tr of this.trail) (tr.sprite.material as THREE.SpriteMaterial).color.set(floater ? PALETTE.sky : PALETTE.white);
     if (lit) {
       const flick = 1 + (Math.floor(now / 60) % 3) * 0.12;
       this.ballFire.position.copy(at(x, y, z));
@@ -1373,14 +1514,16 @@ export class LiveView {
     c.fillStyle = PALETTE.black;
     c.fillRect(0, 0, VIEW_W, 28);
     c.fillRect(0, VIEW_H - 28, VIEW_W, 28);
-    const cap = this.cineCaption;
-    if (!cap) return;
-    // it slams in big and settles, with a hard shadow
-    const since = now - cap.at, size = since < 120 ? 32 : 24;
+    if (this.cineCaption) this.drawCaption(this.cineCaption, now, VIEW_H - 28 - 14);
+  }
+
+  /** A big caption that slams in and settles, with a hard shadow, its bottom at `bottom`. */
+  private drawCaption(cap: { text: string; color: PaletteName; at: number }, now: number, bottom: number) {
+    const c = this.hud, since = now - cap.at, size = since < 120 ? 32 : 24;
     c.font = `${size}px ${FONT}`;
     c.textAlign = "center";
     c.textBaseline = "top";
-    const y = VIEW_H - 28 - size - 14;
+    const y = bottom - size;
     for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2], [4, 4]]) {
       c.fillStyle = PALETTE.black;
       c.fillText(cap.text, VIEW_W / 2 + dx, y + dy);
@@ -1424,7 +1567,16 @@ export class LiveView {
     const r = this.filming!, c = r.clip, [sx, sy] = this.baseScale[i];
     if (i === c.who) {
       if (pl.z > 0.25) body.scale.set(sx * 0.88, sy * 1.14, 1);
-      if (c.kind === "dunk" && (pl.act === "dunk" || pl.z > 1)) mat.rotation = (this.facing[i] ? -1 : 1) * 0.3;
+      const slam = c.kind === "dunk" || c.kind === "special";
+      if (slam && (pl.act === "dunk" || pl.z > 1)) mat.rotation = (this.facing[i] ? -1 : 1) * 0.3;
+      const style = pl.dunkStyle, up = pl.act === "dunk" || pl.z > 0.4, side = this.facing[i] ? -1 : 1;
+      if (slam && style && up) {
+        const toSlam = c.keys[0] - r.t; // seconds until the ball goes through
+        if (style === "360") body.scale.x = sx * 0.88 * Math.cos(Math.max(0, 0.9 - toSlam) * 14); // a spin: flat, flipped, back
+        if (style === "TOMAHAWK") mat.rotation = side * (toSlam > 0.15 ? -0.5 : 0.65); // cocked back, then whipped down
+        if (style === "WINDMILL") mat.rotation = side * 0.3 * Math.sin(r.t * 12);
+      }
+      if (c.kind === "eurostep" && pl.act === "cross") mat.rotation = side * 0.25 * (pl.euro || 1); // leaning into each plant
     }
     if (c.kind === "ankles" && i === c.vs && pl.act === "stumble") {
       const k = Math.max(0, Math.min(1, (r.t - (c.keys[0] - 0.15)) / 0.25));
@@ -1432,6 +1584,20 @@ export class LiveView {
       return (sx / 2) * Math.abs(Math.sin(mat.rotation));
     }
     return 0;
+  }
+
+  /** A special dunk moves the ball round the dunker: a full circle for a windmill, down under the legs and back up
+   *  for an eastbay. Court coordinates in, court coordinates out. */
+  private specialBall(h: Player, x: number, y: number, z: number): [number, number, number] {
+    const r = this.filming, style = h.dunkStyle;
+    if (!r || h.i !== r.clip.who || h.act !== "dunk" || (style !== "WINDMILL" && style !== "EASTBAY")) return [x, y, z];
+    const toSlam = r.clip.keys[0] - r.t, side = this.facing[h.i] ? 1 : -1;
+    if (style === "WINDMILL") {
+      const a = Math.max(0, 0.7 - toSlam) * 9; // a turn and a half as they rise
+      return [h.x + side * Math.sin(a) * 0.7, y, h.z + 1.1 + Math.cos(a) * 0.7];
+    }
+    const k = Math.max(0, Math.min(1, (0.6 - toSlam) / 0.45)); // 0 → 1 → back up: under the legs and out the other side
+    return [h.x - side * (0.5 - k) * 0.9, y, h.z + 0.2 + Math.abs(k * 2 - 1) * 1.1];
   }
 
   /** Afterimages behind the star, the impact shockwave, dust, and the rim and net springing back after a slam. */
@@ -1442,7 +1608,8 @@ export class LiveView {
       gh.visible = false;
       if (!r || !frames?.length) return;
       const c = r.clip, star = this.g.players[c.who];
-      if (Math.hypot(star.vx, star.vy) < 5 && star.z < 0.5) return; // only when they're flying
+      const flying = Math.hypot(star.vx, star.vy) >= 5 || star.z >= 0.5 || (c.kind === "eurostep" && star.act === "cross");
+      if (!flying) return; // only when they're flying (or zig-zagging)
       const past = frameAt(frames, r.t - 0.1 * (k + 1)).players[c.who];
       const body = this.bodies[c.who], m = gh.material as THREE.SpriteMaterial, map = (body.material as THREE.SpriteMaterial).map;
       if (m.map !== map) (m.map = map), (m.needsUpdate = true);
@@ -1536,6 +1703,7 @@ export class LiveView {
     const star = g.players[clip.who].p.name.toUpperCase(), vs = clip.vs != null ? g.players[clip.vs].p.name.toUpperCase() : "";
     text(`${star}${vs ? ` ON ${vs}` : ""} - ${g.names[clip.side].toUpperCase()}`, x, VIEW_H - BAR + 8, "white");
     text("ANY KEY: SKIP", VIEW_W - 14, VIEW_H - BAR + 20, "steel", 8, "right");
+    if (this.cineCaption && now - this.cineCaption.at < 1400) this.drawCaption(this.cineCaption, now, 64);
   }
 
   /** Behind your end, looking up the court at the hoop you attack, sliding along with the ball, but never so far
@@ -1634,6 +1802,14 @@ export class LiveView {
       for (let r = 0; r < 4; r++) rect(s.x - 4 + r, ty + r, 8 - r * 2, 1, "gold"); // the triangle, in pixel rows
     }
 
+    // the first time you defend in SOLO: YOUR MAN and a red pointer over the one you're guarding
+    if (this.started && this.manIntro && this.manNow >= 0 && !this.cinematic) {
+      const m = g.players[this.manNow], s = this.toScreen(m.x, m.y, m.z + this.bodies[m.i].scale.y + 0.25);
+      const ty = s.y - 8 + (Math.floor(now / 250) % 2);
+      text("YOUR MAN", s.x, ty - 11, "red", 8, "center", true);
+      for (let r = 0; r < 4; r++) rect(s.x - 4 + r, ty + r, 8 - r * 2, 1, "red");
+    }
+
     // your teammates' numbers over their heads (keys 1–5 pass straight to them)
     if (g.size > 1)
       for (const pl of g.players) {
@@ -1721,7 +1897,7 @@ export class LiveView {
 
     if (!this.started) this.drawIntro(rect, text);
     else if (!this.ended) {
-      this.drawControls(rect, text);
+      if (!this.touch) this.drawControls(rect, text); // (on a phone the buttons are on screen)
       if (this.tutor) this.drawLesson(rect, text);
       if (this.menu) this.drawMenu(rect, text);
       else if (g.solo && performance.now() < this.sideUntil && g.poss === 0) this.drawSidePlays(rect, text);
@@ -1739,7 +1915,9 @@ export class LiveView {
     c.globalAlpha = 1;
     text(`STEP ${tu.i + 1}/${STEPS.length}: ${s.title}`, VIEW_W / 2, y + 6, "gold", 8, "center");
     // the lesson says your own keys: {shoot} → K (or whatever you bound)
-    const say = (s2: string) => s2.replace(/\{(\w+)\}/g, (_, a: string) => (ACTIONS as readonly string[]).includes(a) ? keyName(this.keys[a as Action]) : a);
+    const phone = (s2: string) => (this.touch ? s2.replace("ARROWS OR {up}{left}{down}{right}", "THE STICK").replace("THE ARROWS, ENTER", "THE STICK, SHOOT") : s2);
+    const say = (s2: string) => phone(s2).replace(/\{(\w+)\}/g, (_, a: string) =>
+      !(ACTIONS as readonly string[]).includes(a) ? a : this.touch ? TOUCH_NAME[a as Action] : keyName(this.keys[a as Action]));
     text(say(s.how), VIEW_W / 2, y + 20, "white", 8, "center");
     if (tu.stuck) text(`TIP: ${say(s.hint)}`, VIEW_W / 2, y + 33, "lime", 8, "center");
   }
@@ -1797,16 +1975,19 @@ export class LiveView {
     const withBall = g.ball.holder != null && !g.ball.flight && g.players[g.ball.holder].side === 0;
     // your own keys (the CONTROLS screen can change them)
     const k = this.keys, codes = (a: Action) => this.codes(a);
-    const n = (a: Action) => (this.lSprint() && a === "turbo" ? "L" : this.lSprint() && a === "cross" ? "LL" : keyName(k[a]));
+    const n = (a: Action) => keyName(k[a]);
     const SHOOT = codes("shoot"), DIGITS = [1, 2, 3, 4, 5].map((d) => `Digit${d}`), shootCap = `${n("shoot")}/SPC`;
+    const dbl = doubleCap(n("turbo")), scr = `${n("left")}+${n("right")}`, SCR = [...codes("left"), ...codes("right")];
     const rows: [string, string, string[]][] =
       g.size === 1
         ? withBall
-          ? [[shootCap, "SHOOT (HOLD)", SHOOT], [n("turbo"), "TURBO", codes("turbo")], [`${n("turbo")}+${n("shoot")}`, "DUNK", []], [n("cross"), "CROSSOVER", codes("cross")]]
-          : [[shootCap, "JUMP / BLOCK", SHOOT], [n("cross"), "STEAL", codes("cross")], [n("turbo"), "TURBO", codes("turbo")]]
+          ? [[shootCap, "SHOOT (HOLD)", SHOOT], [n("turbo"), "SPRINT", codes("turbo")], [`${n("turbo")}+${n("shoot")}`, "DUNK", []], [dbl, "CROSSOVER", []]]
+          : [[shootCap, "JUMP / BLOCK", SHOOT], [dbl, "STEAL", []], [n("turbo"), "SPRINT", codes("turbo")]]
         : withBall
-          ? [[shootCap, "SHOOT", SHOOT], [n("pass"), "PASS", codes("pass")], ["1-5", "PASS TO", DIGITS], [n("plays"), "PLAYS", codes("plays")], [n("turbo"), "TURBO", codes("turbo")], [n("cross"), "CROSS", codes("cross")]]
-          : [[shootCap, "JUMP / BLOCK", SHOOT], [n("pass"), g.solo ? "CALL BALL" : "SWITCH", codes("pass")], [n("cross"), "STEAL", codes("cross")], [n("plays"), "DEFENCE", codes("plays")], [n("turbo"), "TURBO", codes("turbo")]];
+          ? [[shootCap, "SHOOT", SHOOT], [n("pass"), "PASS", codes("pass")], ["1-5", "PASS TO", DIGITS], [n("plays"), "PLAYS", codes("plays")], [n("turbo"), "SPRINT", codes("turbo")], [dbl, "CROSS", []]]
+          : [[shootCap, "JUMP / BLOCK", SHOOT], [n("pass"), g.solo ? "CALL BALL" : "SWITCH", codes("pass")], [dbl, "STEAL", []], [n("plays"), "DEFENCE", codes("plays")], [n("turbo"), "SPRINT", codes("turbo")]];
+    // a teammate has the ball: you can set him a screen
+    if (g.size > 1 && !withBall && g.ball.holder != null && g.players[g.ball.holder].side === 0) rows.splice(1, 0, [scr, "SCREEN", SCR]);
     rows.push([n("music"), "MUSIC", codes("music")], ["ESC", "PAUSE", []]);
     // one row along the bottom, centred, on a dark see-through strip so the labels read over the court
     const widths = rows.map(([key, action]) => key.length * 8 + 6 + 5 + action.length * 8);
@@ -1855,7 +2036,7 @@ export class LiveView {
     }
     const sub = this.tutor
       ? `${STEPS.length} QUICK STEPS - YOU ATTACK THE FAR HOOP`
-      : g.timed ? "4 QUARTERS OF 1:30 - YOU ATTACK THE FAR HOOP" : `FIRST TO ${g.target} - YOU ATTACK THE FAR HOOP`;
+      : g.timed ? "4 QUARTERS OF 1:30 - YOU ATTACK THE FAR HOOP" : g.half ? `HALF COURT - FIRST TO ${g.target} - TAKE IT BACK AFTER A STOP` : `FIRST TO ${g.target} - YOU ATTACK THE FAR HOOP`;
     // the format on a red ribbon
     const rw = sub.length * 8 + 24;
     rect(cx - rw / 2, 86, rw, 16, "red");
@@ -1865,18 +2046,25 @@ export class LiveView {
     const team = g.size > 1, move = `${n("up")}${n("left")}${n("down")}${n("right")}`, shoot = `${n("shoot")}/SPC`;
     const offence: [string, string][] = [
       [move, "MOVE (OR ARROWS)"],
-      [n("turbo"), "SPRINT"],
+      [`${n("turbo")}/SHIFT`, "SPRINT"],
       [shoot, "HOLD, LET GO: SHOOT"],
       [`${n("turbo")}+${n("shoot")}`, "DUNK AT THE RIM"],
-      ...(team ? ([[n("pass"), "PASS"], ["1-5", "PASS TO A SLOT"], [n("plays"), "CALL A PLAY"]] as [string, string][]) : []),
-      [n("cross"), "CROSSOVER"],
+      ...(team ? ([[n("pass"), "PASS"], ["1-5", "PASS TO A SLOT"], [n("plays"), "CALL A PLAY"], [`${n("left")}+${n("right")}`, "HOLD: SET A SCREEN"]] as [string, string][]) : []),
+      [doubleCap(n("turbo")), "CROSSOVER (DOUBLE-TAP)"],
     ];
     const defence: [string, string][] = [
       [shoot, "JUMP / BLOCK"],
-      [n("cross"), "STEAL"],
+      [doubleCap(n("turbo")), "STEAL (DOUBLE-TAP)"],
       ...(team ? ([[n("pass"), "SWITCH PLAYER"], [n("plays"), "PICK A DEFENCE"]] as [string, string][]) : []),
     ];
     const game: [string, string][] = [[n("music"), "MUSIC"], ["ESC", "PAUSE"]];
+    if (this.touch) {
+      // on a phone: the on-screen buttons
+      offence.splice(0, offence.length, ["STICK", "MOVE"], ["TURBO", "SPRINT (HOLD)"], ["SHOOT", "HOLD, LET GO: SHOOT"], ["TURBO+SHOOT", "DUNK AT THE RIM"],
+        ...(team ? ([["PASS", "PASS"], ["PLAYS", "CALL A PLAY"], ["SCREEN", "HOLD: SET A SCREEN"]] as [string, string][]) : []), ["TURBOx2", "CROSSOVER (DOUBLE-TAP)"]);
+      defence.splice(0, defence.length, ["SHOOT", "JUMP / BLOCK"], ["TURBOx2", "STEAL (DOUBLE-TAP)"], ...(team ? ([["PASS", "SWITCH PLAYER"], ["PLAYS", "PICK A DEFENCE"]] as [string, string][]) : []));
+      game.splice(0, game.length, ["II", "PAUSE"]);
+    }
     const cap = (k: string, x: number, y: number, lit = false) => {
       const w = k.length * 8 + 8;
       rect(x, y, w, 15, lit ? "gold" : "white");
@@ -1887,9 +2075,10 @@ export class LiveView {
     const column = (title: string, list: [string, string][], x: number, y: number) => {
       text(title, x, y, "gold");
       rect(x, y + 11, 250, 1, "slate");
+      const gap = list.length > 8 ? 17 : 19; // a long list (team games' offence) sits a little tighter, clear of TIP OFF
       list.forEach(([k, label], i) => {
-        const w = cap(k, x, y + 18 + i * 19);
-        text(label, x + w + 8, y + 22 + i * 19, "cloud");
+        const w = cap(k, x, y + 18 + i * gap);
+        text(label, x + w + 8, y + 22 + i * gap, "cloud");
       });
     };
     column("OFFENCE", offence, 58, 114);
@@ -1898,7 +2087,7 @@ export class LiveView {
     // tip off: a blinking ENTER key
     const on = Math.floor(now / 450) % 2 === 0, w = 13 * 8 + 8 + 8 + 6 * 8;
     const x = cx - w / 2;
-    cap("ENTER", x, VIEW_H - 64, on);
+    cap(this.touch ? "SHOOT" : "ENTER", x, VIEW_H - 64, on); // (Space tips off too: the SHOOT button)
     text("TIP OFF!", x + 6 * 8 + 16, VIEW_H - 60, on ? "gold" : "fog");
   }
 }

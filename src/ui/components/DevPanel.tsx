@@ -1,15 +1,21 @@
 import { useState } from "react";
-import { DEV_DEFAULTS, DEV_GROUPS, devChanged, getDev, resetDev, setDev, type DevKey } from "../../game/dev.ts";
+import { liveDev, type Dev, type DevKey } from "../../game/dev.ts";
 import { backBlip, moveBlip } from "../sound.ts";
 
 /** A sensible nudge for a number: about a tenth of its default's size (0.01 at the least). */
-function stepFor(key: DevKey) {
-  const d = Math.abs(DEV_DEFAULTS[key]) || 1;
+function stepFor(dev: Dev, key: DevKey) {
+  const d = Math.abs(dev.defaults[key]) || 1;
   return Math.max(0.001, 10 ** (Math.floor(Math.log10(d)) - 1));
 }
 
-/** The dev menu: every live-game tuning number, grouped, searchable, changed in place and saved in this browser. */
-export function DevPanel({ onClose }: { onClose: () => void }) {
+/** The dev menu: every tuning number in one settings group (the live game's by default), grouped, searchable,
+ *  changed in place and saved in this browser. */
+export function DevPanel({ onClose, dev = liveDev, note = "CHANGES WORK AS SOON AS YOU RESUME AND ARE SAVED IN THIS BROWSER. COURT SIZE NEEDS A RESTART." }: {
+  onClose: () => void;
+  dev?: Dev;
+  note?: string;
+}) {
+  const { defaults: DEV_DEFAULTS, groups: DEV_GROUPS, changed: devChanged, get: getDev, reset: resetDev, set: setDev } = dev;
   const [query, setQuery] = useState("");
   const [, refresh] = useState(0);
   const known = new Set(DEV_GROUPS.flatMap((g) => g.items.map(([k]) => k)));
@@ -54,7 +60,7 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
                       type="number"
                       className="px-input w-[80px] !py-0 text-right !text-[16px]"
                       value={v}
-                      step={stepFor(k)}
+                      step={stepFor(dev, k)}
                       onChange={(e) => {
                         const n = parseFloat(e.target.value);
                         if (Number.isFinite(n)) {
@@ -78,7 +84,7 @@ export function DevPanel({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <p className="m-0 text-center text-[14px] leading-[14px] text-steel">
-          CHANGES WORK AS SOON AS YOU RESUME AND ARE SAVED IN THIS BROWSER. COURT SIZE NEEDS A RESTART.
+          {note}
         </p>
       </div>
     </div>

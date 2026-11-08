@@ -17,9 +17,14 @@ describe("public/data/pokemon.json", () => {
   const pool: PokemonData[] = JSON.parse(readFileSync("public/data/pokemon.json", "utf8"));
   const statKeys = ["hp", "atk", "def", "spa", "spd", "spe"] as const;
 
-  it("has every species once, in dex order", () => {
-    expect(pool.length).toBeGreaterThanOrEqual(1025);
-    pool.forEach((p, i) => expect(p.id).toBe(i + 1));
+  it("has every species once, in dex order, then the Alolan forms", () => {
+    const species = pool.filter((p) => p.id < 10000), forms = pool.slice(species.length);
+    expect(species.length).toBeGreaterThanOrEqual(1025);
+    species.forEach((p, i) => expect(p.id).toBe(i + 1));
+    expect(forms.length).toBeGreaterThanOrEqual(18);
+    expect(forms.every((p) => p.id > 10000 && p.name.startsWith("Alolan ") && p.slug.endsWith("-alola"))).toBe(true);
+    expect(new Set(pool.map((p) => p.id)).size).toBe(pool.length);
+    expect(pool.find((p) => p.slug === "raichu-alola")).toMatchObject({ types: ["electric", "psychic"], generation: 7 });
   });
   it("has no missing fields and every sprite file exists", () => {
     for (const p of pool) {

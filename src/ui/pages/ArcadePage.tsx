@@ -16,6 +16,9 @@ import { Results } from "./PlayPage.tsx";
 import { applyDevSettings } from "../../game/dev.ts";
 import { DevPanel } from "../components/DevPanel.tsx";
 import { Arrow } from "../components/Arrow.tsx";
+import { useMusic } from "../bgm.ts";
+import { TouchControls } from "../components/TouchControls.tsx";
+import { isTouch, useScrollToStart } from "../touch.ts";
 
 applyDevSettings(); // the dev menu's saved tuning, before any game starts
 
@@ -28,6 +31,8 @@ export type ArcadeSetup = {
   picks?: number[];
   /** One-character mode (SOLO on the Play page). */
   solo?: boolean;
+  /** Half-court 1v1 (HALF 1V1 on the Play page). */
+  half?: boolean;
   youColor: PaletteName;
   cpuColor: PaletteName;
   level: Difficulty;
@@ -53,6 +58,7 @@ function Energy({ value }: { value: number }) {
 /** The live game (PLAN.md Phases 5–8): the 3D game in a whole-number-scaled pixel stage; Esc pauses (subs, music,
  *  sim the rest); a full game ends on the results screen with the box score. */
 export function ArcadePage() {
+  useMusic(null); // the live game plays its own
   const navigate = useNavigate();
   const state = useLocation().state;
   const setup = valid(state) ? state : null;
@@ -80,7 +86,7 @@ export function ArcadePage() {
       ]);
       if (dead || !host.current) return;
       game.current = new LiveView(host.current, {
-        home: setup.home, away: setup.away, size: setup.size, picks: setup.picks, solo: setup.solo, dex, youColor: setup.youColor, cpuColor: setup.cpuColor,
+        home: setup.home, away: setup.away, size: setup.size, picks: setup.picks, solo: setup.solo, half: setup.half, dex, youColor: setup.youColor, cpuColor: setup.cpuColor,
         level: LIVE_AI[setup.tutorial ? "ROOKIE" : setup.level], seed: Date.now() >>> 0, tutorial: setup.tutorial,
         onOver: (s, result) => setFinal({ score: s, result }),
       });
@@ -144,6 +150,9 @@ export function ArcadePage() {
     }
   }, [paused, final]);
 
+  // TEST (iPhone in Safari): scroll down first, so Safari tucks its bars away; then the page locks
+  const scrollFirst = useScrollToStart();
+
   if (!setup) return <Navigate to="/play" replace />;
 
   const restart = () => {
@@ -193,11 +202,29 @@ export function ArcadePage() {
   }
 
   const live = game.current;
+  const touch = isTouch();
   const roster = paused && view === "subs" ? live?.roster() : null;
   const won = final && final.score[0] > final.score[1];
 
   return (
-    <div className="h-full min-h-[360px]">
+    <div className="h-full min-h-[360px]" style={touch ? { touchAction: scrollFirst ? "pan-y" : "none" } : undefined /* no scrolling or zooming the game on a phone */}>
+      {touch && dex && !paused && !final && !scrollFirst && <TouchControls team={setup.size > 1} nearRim={() => !!game.current?.nearRim} />}
+      {scrollFirst && (
+        <div className="pointer-events-none fixed inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/70 px-16 text-center [@media(orientation:portrait)]:bg-black">
+          {/* sideways first; then the scroll (it tucks Safari's bars away) */}
+          <span className="hidden font-head text-[16px] leading-[1.6] text-gold [@media(orientation:portrait)]:inline">TURN YOUR PHONE SIDEWAYS</span>
+          <span className="hidden text-[24px] text-cloud [@media(orientation:portrait)]:inline">The court needs the whole screen.</span>
+          <span className="blink font-head text-[16px] leading-[1.6] text-gold [@media(orientation:portrait)]:hidden">SCROLL DOWN TO START</span>
+          <span className="text-[24px] text-cloud [@media(orientation:portrait)]:hidden">
+            Swipe up from the very right side of your screen.
+          </span>
+          {/* a pointer on that edge */}
+          <span className="blink absolute right-[24px] top-1/2 flex -translate-y-1/2 flex-col items-center gap-[4px] font-head text-[24px] text-gold [@media(orientation:portrait)]:hidden">
+            <span className="inline-block -rotate-90"><Arrow /></span>
+            {[0, 1, 2].map((i) => <span key={i} className="h-[6px] w-[6px] bg-gold" />)}
+          </span>
+        </div>
+      )}
       <PixelStage>
         {(h) => (
           <div className="relative h-full w-full">
@@ -283,7 +310,8 @@ export function ArcadePage() {
                       </button>
                     ))}
                   </div>
-                  <p className="m-0 text-center text-[16px] leading-[16px] text-steel">ARROWS, SPACE AND RIGHT SHIFT ALWAYS WORK TOO</p>
+                  <p className="m-0 text-center text-[16px] leading-[16px] text-steel">ARROWS, SPACE AND SHIFT ALWAYS WORK TOO</p>
+                  <p className="m-0 text-center text-[16px] leading-[16px] text-steel">DOUBLE-TAP SPRINT: CROSSOVER / STEAL. HOLD LEFT + RIGHT: SCREEN</p>
                   <div className="flex gap-2">
                     <button className="px-btn flex-1 !text-[18px]" onClick={() => (backBlip(), saveKeys(DEFAULT_KEYS), setKeys(DEFAULT_KEYS))}>RESET</button>
                     <button className="px-btn flex-1 !text-[18px]" onClick={() => (backBlip(), setListening(null), setView("menu"))}><Arrow left /> BACK (ESC)</button>

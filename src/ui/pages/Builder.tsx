@@ -37,6 +37,7 @@ import { useRated } from "../data.ts";
 import { backBlip, selectBlip } from "../sound.ts";
 import { inkOn, PALETTE } from "../theme/palette.ts";
 import { Arrow } from "../components/Arrow.tsx";
+import { useMusic } from "../bgm.ts";
 
 const PAGE = 50;
 type Panel = null | "teams" | "share";
@@ -97,6 +98,7 @@ function SlotTile({ slot, p, boost, selected, color, onPick, onClear, onStats }:
 }
 
 export function Builder() {
+  useMusic("menu");
   const navigate = useNavigate();
   const { data, error } = useRated();
   const dex = useMemo(() => (data ? dexOf(data) : new Map<number, RatedPokemon>()), [data]);

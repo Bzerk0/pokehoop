@@ -70,7 +70,7 @@ export const STEPS: Step[] = [
   },
   {
     title: "DEFEND",
-    how: "{cross} NEAR THE BALL STEALS, {shoot} JUMPS TO BLOCK",
+    how: "DOUBLE-TAP {turbo} NEAR THE BALL TO STEAL, {shoot} JUMPS TO BLOCK",
     hint: "{pass} SWITCHES TO WHOEVER IS NEAREST THE BALL",
     cpu: true,
     setup: theirBall,

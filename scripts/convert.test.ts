@@ -29,7 +29,7 @@ describe("toPokemonData", () => {
         varieties: [],
       },
       {
-        height: 4, weight: 60, sprites: { front_default: "x" },
+        id: 25, name: "pikachu", height: 4, weight: 60, sprites: { front_default: "x" },
         types: [{ slot: 1, type: { name: "electric" } }],
         stats: [stat("hp", 35), stat("attack", 55), stat("defense", 40), stat("special-attack", 50),
           stat("special-defense", 50), stat("speed", 90)],

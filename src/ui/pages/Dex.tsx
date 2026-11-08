@@ -7,8 +7,10 @@ import { DexBrowser } from "../components/DexBrowser.tsx";
 import { useRated } from "../data.ts";
 import { backBlip } from "../sound.ts";
 import { Arrow } from "../components/Arrow.tsx";
+import { useMusic } from "../bgm.ts";
 
 export function Dex() {
+  useMusic("menu");
   const navigate = useNavigate();
   const { data, error } = useRated();
   const [open, setOpen] = useState<RatedPokemon | null>(null);

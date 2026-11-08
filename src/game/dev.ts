@@ -1,72 +1,71 @@
-// The dev menu's settings: change the live game's tuning numbers (LIVE in ratingConfig.ts) while testing. Changes
+// The dev menus' settings: change tuning numbers (the live game's LIVE, the arcade draft's ARCADE) while testing. Changes
 // apply at once (the engine reads LIVE every step; court size on the next game) and are saved in this browser, so a
 // reload keeps them. Only the numbers that differ from the defaults are saved, so "reset" is just forgetting them.
-import { LIVE } from "../core/ratingConfig.ts";
+import { ARCADE, LIVE } from "../core/ratingConfig.ts";
 
-/** A setting's path in LIVE: "quickTap", or one level down like "timing.perfect". */
+/** A setting's path in its settings object: "quickTap", or one level down like "timing.perfect". */
 export type DevKey = string;
 type Bag = Record<string, unknown>;
+export type DevGroups = { title: string; items: [DevKey, string][] }[];
 
-const STORE = "s5p-dev-v1";
-
-/** Every number in LIVE (one level of nesting), with its default value as the game shipped. */
-export const DEV_DEFAULTS: Record<DevKey, number> = (() => {
-  const out: Record<DevKey, number> = {};
-  for (const [k, v] of Object.entries(LIVE as Bag)) {
-    if (typeof v === "number") out[k] = v;
-    else if (v && typeof v === "object") for (const [k2, v2] of Object.entries(v as Bag)) if (typeof v2 === "number") out[`${k}.${k2}`] = v2;
+/** A dev menu over one settings object (`target`, edited in place), saved in this browser under `store`. */
+export function makeDev(target: object, store: string, groups: DevGroups) {
+  const bag = target as Bag;
+  /** Every number in it (one level of nesting), with its default value as the game shipped. */
+  const defaults: Record<DevKey, number> = {};
+  for (const [k, v] of Object.entries(bag)) {
+    if (typeof v === "number") defaults[k] = v;
+    else if (v && typeof v === "object") for (const [k2, v2] of Object.entries(v as Bag)) if (typeof v2 === "number") defaults[`${k}.${k2}`] = v2;
   }
-  return out;
-})();
-
-export function getDev(key: DevKey): number {
-  const [a, b] = key.split(".");
-  return (b ? ((LIVE as Bag)[a] as Bag)[b] : (LIVE as Bag)[a]) as number;
+  const get = (key: DevKey): number => {
+    const [a, b] = key.split(".");
+    return (b ? (bag[a] as Bag)[b] : bag[a]) as number;
+  };
+  const put = (key: DevKey, value: number) => {
+    const [a, b] = key.split(".");
+    if (b) (bag[a] as Bag)[b] = value;
+    else bag[a] = value;
+  };
+  const changedKeys = () => Object.keys(defaults).filter((k) => get(k) !== defaults[k]);
+  const save = () => {
+    try {
+      localStorage.setItem(store, JSON.stringify(Object.fromEntries(changedKeys().map((k) => [k, get(k)]))));
+    } catch {
+      // storage blocked: the change still holds until the page reloads
+    }
+  };
+  return {
+    defaults,
+    groups,
+    get,
+    /** Change a setting (now, and saved for next time). */
+    set(key: DevKey, value: number) {
+      if (!(key in defaults) || !Number.isFinite(value)) return;
+      put(key, value);
+      save();
+    },
+    /** Put one setting (or all of them) back to the default. */
+    reset(key?: DevKey) {
+      for (const k of key ? [key] : Object.keys(defaults)) put(k, defaults[k]);
+      save();
+    },
+    /** Load the saved changes (call once, before they're needed). */
+    apply() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(store) ?? "{}") as Record<string, unknown>;
+        for (const [k, v] of Object.entries(saved)) if (k in defaults && typeof v === "number" && Number.isFinite(v)) put(k, v);
+      } catch {
+        // nothing saved, or junk: the defaults
+      }
+    },
+    /** How many settings are changed from the defaults (shown on the menu button). */
+    changed: () => changedKeys().length,
+  };
 }
-
-function put(key: DevKey, value: number) {
-  const [a, b] = key.split(".");
-  if (b) ((LIVE as Bag)[a] as Bag)[b] = value;
-  else (LIVE as Bag)[a] = value;
-}
-
-function save() {
-  try {
-    const changed = Object.fromEntries(Object.keys(DEV_DEFAULTS).filter((k) => getDev(k) !== DEV_DEFAULTS[k]).map((k) => [k, getDev(k)]));
-    localStorage.setItem(STORE, JSON.stringify(changed));
-  } catch {
-    // storage blocked: the change still holds until the page reloads
-  }
-}
-
-/** Change a setting (now, and saved for next time). */
-export function setDev(key: DevKey, value: number) {
-  if (!(key in DEV_DEFAULTS) || !Number.isFinite(value)) return;
-  put(key, value);
-  save();
-}
-
-/** Put one setting (or all of them) back to the default. */
-export function resetDev(key?: DevKey) {
-  for (const k of key ? [key] : Object.keys(DEV_DEFAULTS)) put(k, DEV_DEFAULTS[k]);
-  save();
-}
-
-/** Load the saved changes into LIVE (call once, before a game starts). */
-export function applyDevSettings() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORE) ?? "{}") as Record<string, unknown>;
-    for (const [k, v] of Object.entries(saved)) if (k in DEV_DEFAULTS && typeof v === "number" && Number.isFinite(v)) put(k, v);
-  } catch {
-    // nothing saved, or junk: the defaults
-  }
-}
-
-/** How many settings are changed from the defaults (shown on the menu button). */
-export const devChanged = () => Object.keys(DEV_DEFAULTS).filter((k) => getDev(k) !== DEV_DEFAULTS[k]).length;
+export type Dev = ReturnType<typeof makeDev>;
 
 /** The settings worth reaching for, in groups, with what each one does. Anything else in LIVE is under "EVERYTHING ELSE". */
-export const DEV_GROUPS: { title: string; items: [DevKey, string][] }[] = [
+export const DEV_GROUPS: DevGroups = [
   {
     title: "QUICK SHOT",
     items: [
@@ -141,9 +140,7 @@ export const DEV_GROUPS: { title: string; items: [DevKey, string][] }[] = [
       ["gravity", "m/s² how fast jumps come down"],
       ["doubleJump", "Flying/Dragon second jump × the first"],
       ["doubleSteer", "× top speed: double jump turns you this fast"],
-      ["sprintOnL", "TEST: 1 = L sprints, double-tap L crossover"],
-      ["doubleTap", "seconds: two L taps this close = double tap"],
-      ["sprintTap", "seconds: a sprint tap this short = crossover"],
+      ["doubleTap", "seconds: two sprint taps this close = crossover / steal"],
       ["stepBackBoost", "× burst on a step-back"],
     ],
   },
@@ -178,4 +175,44 @@ export const DEV_GROUPS: { title: string; items: [DevKey, string][] }[] = [
       ["replayHype.buzzer", "hype added for a buzzer-beater"],
     ],
   },
+  {
+    title: "LIVE CINE SHOTS",
+    items: [
+      ["cineShots.dunk", "1 = cut live to dunks"],
+      ["cineShots.special", "1 = special dunks (360, windmill...)"],
+      ["cineShots.oop", "1 = alley-oops (from the catch)"],
+      ["cineShots.block", "1 = blocks"],
+      ["cineShots.corner", "1 = corner threes"],
+      ["cineShots.eurostep", "1 = eurosteps"],
+      ["cineShots.floater", "1 = floaters"],
+    ],
+  },
 ];
+
+/** The live game's dev menu (LIVE). */
+export const liveDev = makeDev(LIVE, "s5p-dev-v1", DEV_GROUPS);
+export const { defaults: DEV_DEFAULTS, get: getDev, set: setDev, reset: resetDev, apply: applyDevSettings, changed: devChanged } = liveDev;
+
+/** The arcade draft's dev menu (ARCADE): the slot machine's odds. */
+export const draftDev = makeDev(ARCADE, "s5p-dev-draft-v1", [
+  {
+    title: "SLOT MACHINE",
+    items: [
+      ["reels", "Pokémon per pull"],
+      ["weights.STAR", "how often a reel lands STAR (vs the others)"],
+      ["weights.STARTER", "how often a reel lands STARTER"],
+      ["weights.ROLE", "how often a reel lands ROLE"],
+      ["weights.SLEEPER", "how often a reel lands SLEEPER"],
+      ["starChance", "chance a pull with no STAR gets one"],
+      ["firstStar", "the same for the draft's first pull"],
+    ],
+  },
+  {
+    title: "PRICES (EVERY DRAFT)",
+    items: [
+      ["price.vary", "± share a Pokémon's price can stray (0.12 = 12%)"],
+      ["price.perDraft", "1 = new price tweaks every draft (saved teams may go over the cap)"],
+      ["price.seed", "which set of tweaks is in use"],
+    ],
+  },
+]);

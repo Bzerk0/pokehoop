@@ -17,7 +17,7 @@ import {
   type Draft,
 } from "./draft.ts";
 import { budgetFor, dexOf, isEligible, payroll, problems, salary, SLOTS, slotOvr, teamRating } from "./lineup.ts";
-import { DRAFT_GRADES, DRAFT_OFFERS, DRAFT_REROLLS, SALARY_CAP } from "./ratingConfig.ts";
+import { ARCADE, DRAFT_GRADES, DRAFT_REROLLS, SALARY_CAP } from "./ratingConfig.ts";
 import { rateAll } from "./ratings.ts";
 import { makeRng } from "./rng.ts";
 
@@ -30,8 +30,8 @@ function run(seed: number, choose: (d: Draft) => Choice, mode: "classic" | "unli
   let d = startDraft(pool, dex, mode, seed);
   while (!isOver(d)) {
     const budget = budgetFor(toLineup(d), openSlots(d)[0], dex);
-    expect(d.offers).toHaveLength(DRAFT_OFFERS);
-    expect(new Set(d.offers.map((o) => o.id)).size).toBe(DRAFT_OFFERS);
+    expect(d.offers).toHaveLength(ARCADE.reels);
+    expect(new Set(d.offers.map((o) => o.id)).size).toBe(ARCADE.reels);
     for (const o of d.offers) {
       const p = dex.get(o.id)!;
       expect(isEligible(p, mode)).toBe(true);
@@ -54,10 +54,22 @@ const sensibly = (d: Draft): Choice => {
 };
 
 describe("draft", () => {
-  it("round 1 offers one Pokémon from each tier, best tier first", () => {
-    const d = startDraft(pool, dex, "classic", 1);
-    expect(d.offers.map((o) => o.tier)).toEqual(["STAR", "STARTER", "ROLE", "SLEEPER"]);
-  });
+  it("the first pull always has a STAR; after that most pulls do, and better tiers land less often", () => {
+    const count: Record<string, number> = { STAR: 0, STARTER: 0, ROLE: 0, SLEEPER: 0 };
+    let later = 0, laterStar = 0;
+    for (let seed = 1; seed <= 150; seed++) {
+      const d = startDraft(pool, dex, "classic", seed);
+      expect(d.offers.some((o) => o.tier === "STAR"), `seed ${seed}`).toBe(true);
+      const r = reroll(d, pool, dex); // a later pull (same budget, so a STAR is affordable)
+      later++;
+      if (r.offers.some((o) => o.tier === "STAR")) laterStar++;
+      for (const o of r.offers) count[o.tier]++;
+    }
+    expect(laterStar / later).toBeGreaterThan(ARCADE.starChance - 0.07);
+    expect(laterStar / later).toBeLessThan(Math.min(1, ARCADE.starChance + 0.07));
+    // without the STAR top-up, reels follow the weights: rarer tiers land less often
+    expect(count.STARTER).toBeLessThan(count.ROLE);
+  }, 30_000);
 
   it("every draft can be finished, under the cap, with no rule broken (random picks and spots, many seeds)", () => {
     for (let seed = 1; seed <= 30; seed++) {

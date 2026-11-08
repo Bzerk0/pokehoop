@@ -35,11 +35,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /** The Pokédex: filters (search, type, gen, position, sort, pool) over a grid of cards. The Pokédex page and the
  *  character select both use it. `onCard` is a click on a card; `onStats` (optional) adds an "i" badge to each;
  *  `tagOf` (optional) marks a card as picked with a label like "P1". */
-export function DexBrowser({ data, onCard, onStats, tagOf, autoFocus = false }: {
+export function DexBrowser({ data, onCard, onStats, tagOf, overlayOf, autoFocus = false }: {
   data: RatedPokemon[];
   onCard: (p: RatedPokemon) => void;
   onStats?: (p: RatedPokemon) => void;
   tagOf?: (p: RatedPokemon) => string | undefined;
+  overlayOf?: (p: RatedPokemon) => React.ReactNode; // drawn over a card (the character select's picked layer)
   autoFocus?: boolean;
 }) {
   const [query, setQuery] = useState("");
@@ -116,7 +117,8 @@ export function DexBrowser({ data, onCard, onStats, tagOf, autoFocus = false }: 
         {list.slice(0, limit).map((p) => (
           <div key={p.id} className="relative flex">
             <MiniCard p={p} pos={pos || undefined} onOpen={() => onCard(p)} tag={tagOf?.(p)} />
-            {onStats && <StatsButton p={p} onOpen={() => onStats(p)} className="absolute -bottom-[10px] -right-[10px]" />}
+            {overlayOf?.(p)}
+            {onStats && <StatsButton p={p} onOpen={() => onStats(p)} className="absolute -bottom-[10px] -right-[10px] z-20" />}
           </div>
         ))}
       </div>

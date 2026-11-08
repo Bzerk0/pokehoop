@@ -19,7 +19,7 @@ import {
   type Tier,
 } from "../../core/draft.ts";
 import { boostedOvr, budgetFor, dexOf, NAME_MAX, payroll, salary, SLOTS, slotOvr, STARTERS, teamOvr, teamRating, type Lineup, type Mode } from "../../core/lineup.ts";
-import { DRAFT_REROLLS } from "../../core/ratingConfig.ts";
+import { ARCADE, DRAFT_REROLLS } from "../../core/ratingConfig.ts";
 import type { RatedPokemon } from "../../core/types.ts";
 import { clearRun, loadRun, saveDraft, saveRun, saveTeam } from "../../storage.ts";
 import { HomeLogo } from "../components/HomeLogo.tsx";
@@ -29,10 +29,66 @@ import { Modal, PlayerModal, StatsButton } from "../components/Modal.tsx";
 import { Sprite, TypeChip } from "../components/PlayerCard.tsx";
 import { CapMeter, ColorPick, downloadCard, shareUrl } from "../components/TeamControls.tsx";
 import { useRated } from "../data.ts";
-import { backBlip, blip, moveBlip, selectBlip } from "../sound.ts";
+import { backBlip, blip, moveBlip, selectBlip, slotSpin } from "../sound.ts";
 import { inkOn, PALETTE, type PaletteName } from "../theme/palette.ts";
 import { Arrow } from "../components/Arrow.tsx";
 import { GAME_NAME } from "../name.ts";
+import { draftDev } from "../../game/dev.ts";
+import { DevPanel } from "../components/DevPanel.tsx";
+import { FullDraftView } from "../components/FullDraftView.tsx";
+import { BALL_URL } from "../art/ballLogo.ts";
+import { useMusic } from "../bgm.ts";
+
+draftDev.apply(); // the slot machine odds you set in the draft dev menu (` on this page)
+
+/** A spinning reel: faces flicking past (whoever lands is decided already; this is just the show). */
+function SpinReel({ faces }: { faces: RatedPokemon[] }) {
+  return (
+    <div className="flex h-[284px] justify-center overflow-hidden border-4 border-slate bg-navy">
+      <div className="slot-spin flex flex-col items-center">
+        {[...faces, ...faces].map((p, k) => (
+          <span key={k} className="flex h-[110px] shrink-0 items-center">
+            <Sprite p={p} scale={2} eager className="max-w-none" />
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** A row of marquee bulbs: every other one blinks, so they seem to chase. */
+const Lights = ({ n = 24 }: { n?: number }) => (
+  <div className="flex justify-between px-1" aria-hidden>
+    {Array.from({ length: n }, (_, i) => (
+      <span key={i} className={`h-[6px] w-[6px] ${i % 2 ? "bg-cream" : "bg-white"} blink`} style={{ animationDelay: i % 2 ? "-0.5s" : "0s" }} />
+    ))}
+  </div>
+);
+
+/** Polished gold: a dark outline, a light top-left edge and a deeper bottom-right one (flat colours, no gradient). */
+const GOLD = { background: PALETTE.gold, boxShadow: `inset 4px 4px 0 ${PALETTE.cream}, inset -4px -4px 0 ${PALETTE.amber}` };
+/** Rounded corners in pixel steps (three steps of `step` px), for clip-path. */
+const corners = (step = 4) => {
+  const a = step, b = step * 2, c = step * 3, R = (v: number) => `calc(100% - ${v}px)`;
+  return `polygon(0 ${c}px,${a}px ${c}px,${a}px ${b}px,${b}px ${b}px,${b}px ${a}px,${c}px ${a}px,${c}px 0,${R(c)} 0,${R(c)} ${a}px,${R(b)} ${a}px,${R(b)} ${b}px,${R(a)} ${b}px,${R(a)} ${c}px,100% ${c}px,100% ${R(c)},${R(a)} ${R(c)},${R(a)} ${R(b)},${R(b)} ${R(b)},${R(b)} ${R(a)},${R(c)} ${R(a)},${R(c)} 100%,${c}px 100%,${c}px ${R(a)},${b}px ${R(a)},${b}px ${R(b)},${a}px ${R(b)},${a}px ${R(c)},0 ${R(c)})`;
+};
+/** A stepped pixel arch for the sign on top. */
+const ARCH = "polygon(0 100%,0 38%,3% 38%,3% 22%,8% 22%,8% 10%,16% 10%,16% 3%,28% 3%,28% 0,72% 0,72% 3%,84% 3%,84% 10%,92% 10%,92% 22%,97% 22%,97% 38%,100% 38%,100% 100%)";
+/** White shine on the gold: a long streak, corner glints and a few twinkles. */
+const Shine = () => (
+  <>
+    <span className="pointer-events-none absolute left-[10px] top-[14px] h-[45%] w-[6px] bg-white" />
+    <span className="pointer-events-none absolute left-[18px] top-[14px] h-[18%] w-[2px] bg-white" />
+    <span className="pointer-events-none absolute right-[12px] top-[10px] h-[4px] w-[4px] bg-white" />
+    <span className="pointer-events-none absolute bottom-[12px] left-[12px] h-[4px] w-[4px] bg-white" />
+    {[["8%", "22%"], ["94%", "48%"], ["50%", "96%"]].map(([x, y], i) => (
+      <span key={i} className="blink pointer-events-none absolute" style={{ left: x, top: y, animationDelay: `${-i * 0.33}s` }}>
+        <span className="absolute left-[-1px] top-[-5px] h-[10px] w-[2px] bg-white" />
+        <span className="absolute left-[-5px] top-[-1px] h-[2px] w-[10px] bg-white" />
+      </span>
+    ))}
+  </>
+);
 
 /** Each tier's frame colour, like card rarities. */
 const TIER_COLOR: Record<Tier, PaletteName> = { STAR: "gold", STARTER: "sky", ROLE: "green", SLEEPER: "lavender" };
@@ -76,15 +132,15 @@ function OfferCard({ offer, p, index, state, chem, spot, onPick, onStats }: {
           <span>{offer.tier}</span>
           <span>{state === "selected" ? "SELECTED" : `[${index + 1}]`}</span>
         </span>
-        <span className="flex h-[200px] items-end justify-center overflow-hidden bg-navy pb-2">
-          <Sprite p={p} scale={2} eager className="max-w-none" />
+        <span className="flex h-[120px] items-end justify-center overflow-hidden bg-navy pb-1">
+          <Sprite p={p} scale={p.spriteH > 60 ? 1 : 2} eager className="max-w-none" />
         </span>
-        <span className="flex flex-col gap-1 p-2">
-          <span className="truncate text-[24px] leading-[24px] text-white">{p.name}</span>
+        <span className="flex flex-col gap-[2px] px-2 py-1">
+          <span className="truncate text-[22px] leading-[22px] text-white">{p.name}</span>
           <span className="flex flex-wrap gap-1">{p.types.map((t) => <TypeChip key={t} type={t} />)}</span>
           <span className="mt-1 flex items-end justify-between">
             <span>
-              <span className="block font-head text-[32px] leading-[32px] text-gold">
+              <span className="block font-head text-[24px] leading-[26px] text-gold">
                 {ovr}
                 {drop > 0 && <span className="ml-2 font-body text-[24px] text-red">-{drop}</span>}
               </span>
@@ -92,11 +148,10 @@ function OfferCard({ offer, p, index, state, chem, spot, onPick, onStats }: {
             </span>
             <span className="text-[28px] leading-[28px] text-lime">${salary(p)}M</span>
           </span>
-          {chem.boost > 0 && (
-            <span className="text-[20px] leading-[18px] text-lime">
-              +{chem.boost} CHEM: {chem.links.map((k) => k.name).join(", ")}
-            </span>
-          )}
+          {/* always one line, even when empty, so a chemistry bonus never makes this card taller than the others */}
+          <span className="h-[18px] truncate text-[18px] leading-[18px] text-lime" title={chem.links.map((k) => k.name).join(", ")}>
+            {chem.boost > 0 ? `+${chem.boost} CHEM: ${chem.links.map((k) => k.name).join(", ")}` : ""}
+          </span>
         </span>
       </button>
       <StatsButton p={p} onOpen={onStats} className="absolute right-[6px] top-[4px]" />
@@ -106,9 +161,9 @@ function OfferCard({ offer, p, index, state, chem, spot, onPick, onStats }: {
 
 /** The roster: one tile per spot. While a pick is selected, every open spot is a button showing how it would rate
  *  there; its best spot blinks. */
-function Roster({ draft, dex, placing, onPlace, spot, onSpot }: {
+function Roster({ draft, dex, placing, onPlace, spot, onSpot, onStats }: {
   draft: Draft; dex: Map<number, RatedPokemon>; placing?: RatedPokemon; onPlace?: (slot: number) => void;
-  spot?: number | null; onSpot?: (slot: number) => void;
+  spot?: number | null; onSpot?: (slot: number) => void; onStats?: (p: RatedPokemon) => void;
 }) {
   const { boosts } = chemistry(toLineup(draft), dex);
   const best = placing && bestSpot(draft, placing);
@@ -153,7 +208,7 @@ function Roster({ draft, dex, placing, onPlace, spot, onSpot }: {
           );
         }
         return (
-          <div key={slot} className={`flex flex-col border-4 bg-night px-1 ${p ? "border-slate" : "border-night"}`}>
+          <div key={slot} className={`relative flex flex-col border-4 bg-night px-1 ${p ? "border-slate" : "border-night"}`}>
             <span className="flex justify-between text-[20px] leading-[20px]">
               <span className="text-cloud">{label}</span>
               {p && (
@@ -167,6 +222,7 @@ function Roster({ draft, dex, placing, onPlace, spot, onSpot }: {
               {p && <Sprite key={p.id} p={p} eager className="land max-w-none" />}
             </span>
             <span className="truncate text-center text-[18px] leading-[18px] text-white">{p?.name ?? " "}</span>
+            {p && onStats && <StatsButton p={p} onOpen={() => onStats(p)} className="absolute -bottom-[10px] -right-[10px] z-10" />}
           </div>
         );
       })}
@@ -175,6 +231,7 @@ function Roster({ draft, dex, placing, onPlace, spot, onSpot }: {
 }
 
 export function DraftPage() {
+  useMusic("menu");
   const navigate = useNavigate();
   const { data, error } = useRated();
   const dex = useMemo(() => (data ? dexOf(data) : null), [data]);
@@ -190,6 +247,16 @@ export function DraftPage() {
   const [sharing, setSharing] = useState(false);
   const [showResults, setShowResults] = useState(true);
   const card = useRef<HTMLDivElement>(null);
+  // the slot machine: which deal's reels have been pulled and shown, how many reels have stopped, the handle
+  const [revealed, setRevealed] = useState(-1);
+  const [spinning, setSpinning] = useState(false);
+  const [stopped, setStopped] = useState(0);
+  const [lever, setLever] = useState(false);
+  const [devOpen, setDevOpen] = useState(false);
+  const [full, setFull] = useState<{ mode: Mode; seed: number } | null>(null); // a FULL DRAFT in progress
+  const [fullMode, setFullMode] = useState<Mode>("classic");
+  const latest = useRef<Draft | null>(null);
+  latest.current = run?.draft ?? null;
 
   // pick up a draft in progress (checked against the data before it's trusted)
   useEffect(() => {
@@ -199,6 +266,7 @@ export function DraftPage() {
     if (draft) {
       setRun({ draft, name: String(stored!.name ?? "").slice(0, NAME_MAX), colors: stored!.colors ?? [9, 12] });
       setShowResults(!isOver(draft)); // a finished draft waits in the Last Draft box
+      setRevealed(draft.deals);
     }
     setLoaded(true);
   }, [dex, loaded]);
@@ -213,15 +281,49 @@ export function DraftPage() {
     if (!data || !dex) return;
     selectBlip();
     const seed = daily ? dailySeed() : Date.now();
+    if (ARCADE.price.perDraft >= 1) draftDev.set("price.seed", seed % 100000); // new price tweaks for this draft
     const draft = startDraft(data, dex, daily ? "classic" : quickMode, seed, daily);
     setRun({ draft, name: daily ? `DAILY ${dateLabel(seed).slice(5)}` : "MY DRAFT", colors: [9, 12] });
+    setShowResults(true);
+    setRevealed(-1); // pull the handle for the first round
+  };
+
+  /** Pull the handle: the reels spin, then stop one by one (a STAR lands with a flash and a jingle). */
+  const pull = () => {
+    const d = latest.current;
+    if (!d || spinning || call || isOver(d)) return;
+    blip(196, 90, 0.06);
+    setLever(true);
+    setTimeout(() => setLever(false), 700);
+    setSpinning(true);
+    setStopped(0);
+    const reels = d.offers.length;
+    slotSpin((650 + (reels - 1) * 380) / 1000); // the whirl until the last reel stops
+    for (let i = 0; i < reels; i++)
+      setTimeout(() => {
+        setStopped(i + 1);
+        blip(260 + i * 90, 70, 0.06);
+        if (latest.current?.offers[i]?.tier === "STAR") [1047, 1319, 1568, 2093].forEach((f, k) => setTimeout(() => blip(f, 70, 0.05), 80 + k * 70));
+      }, 650 + i * 380);
+    setTimeout(() => {
+      setSpinning(false);
+      setRevealed(latest.current?.deals ?? -1);
+    }, 650 + (reels - 1) * 380 + 150);
+  };
+
+  /** The Full Draft's finished picks become this draft's team (results, PLAY and all). */
+  const finishFull = (ids: (number | null)[]) => {
+    if (!full) return;
+    const draft: Draft = { seed: full.seed, mode: full.mode, daily: false, round: SLOTS.length, ids, offers: [], rerolls: 0, deals: 0 };
+    setRun({ draft, name: "MY DRAFT", colors: [9, 12] });
+    setFull(null);
     setShowResults(true);
   };
 
   /** Select an offer (or unselect it); placing it on the roster is the second step. With a spot already chosen,
    *  the offer goes straight there. */
   const choose = (id: number) => {
-    if (!run || call || isOver(run.draft)) return;
+    if (!run || call || isOver(run.draft) || revealed !== run.draft.deals) return;
     if (spot != null) return place(spot, id);
     moveBlip();
     setSelected((s) => (s === id ? null : id));
@@ -247,7 +349,7 @@ export function DraftPage() {
     }, CALL_MS);
   };
 
-  const drafting = loaded && !!run && !isOver(run.draft);
+  const drafting = (loaded && !!run && !isOver(run.draft)) || !!full;
 
   /** Throw the draft away and go back to the draft's start screen, ready for a fresh one. */
   const quit = () => {
@@ -257,19 +359,24 @@ export function DraftPage() {
     setSelected(null);
     setSpot(null);
     setQuitting(false);
+    setFull(null);
   };
 
   const doReroll = () => {
-    if (!run || !data || !dex || call || run.draft.rerolls <= 0 || isOver(run.draft)) return;
-    moveBlip();
+    if (!run || !data || !dex || call || spinning || run.draft.rerolls <= 0 || isOver(run.draft) || revealed !== run.draft.deals) return;
     setSelected(null); // the chosen spot stays: the new offers rate there too
-    setRun({ ...run, draft: reroll(run.draft, data, dex) });
+    const next = reroll(run.draft, data, dex);
+    latest.current = next;
+    setRun({ ...run, draft: next });
+    pull();
   };
 
   // keys: 1–4 select, Enter places at the best fit, R rerolls, Esc unselects or leaves (the draft is kept)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      if (e.code === "Backquote") return void (e.preventDefault(), setDevOpen((o) => !o)); // the draft dev menu
+      if (devOpen || (e.target as HTMLElement)?.tagName === "INPUT") return;
+      if ((e.key === " " || e.key === "Enter") && run && !isOver(run.draft) && revealed !== run.draft.deals) return void (e.preventDefault(), pull());
       if (e.key === "Escape") {
         backBlip();
         if (selected != null) setSelected(null);
@@ -314,6 +421,21 @@ export function DraftPage() {
   if (error) return <div className="mx-auto max-w-[1200px] p-4">{header}<div className="px-box p-3 text-red">{error}</div></div>;
   if (!dex || !data || !loaded) return <div className="mx-auto max-w-[1200px] p-4">{header}<div className="blink font-head text-[16px] text-cloud">LOADING…</div></div>;
 
+  const devMenu = devOpen && (
+    <div className="fixed inset-0 z-50">
+      <DevPanel dev={draftDev} onClose={() => setDevOpen(false)} note="SLOT MACHINE ODDS: THEY APPLY FROM THE NEXT PULL, AND ARE SAVED IN THIS BROWSER." />
+    </div>
+  );
+
+  if (full)
+    return (
+      <div className="mx-auto max-w-[1200px] p-4">
+        {header}
+        <FullDraftView pool={data} dex={dex} mode={full.mode} seed={full.seed} onDone={finishFull} />
+        {devMenu}
+      </div>
+    );
+
   // ── setup ──────────────────────────────────────────────────────────────
   // the setup screen: no draft yet, or a finished one tucked into a Last Draft box (it stays saved for PLAY)
   if (!run || (isOver(run.draft) && !showResults)) {
@@ -324,6 +446,7 @@ export function DraftPage() {
         {header}
         <section className="mb-4 border-4 border-black bg-red px-4 py-5" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
           <p className="m-0 font-head text-[24px] leading-[1.3] text-white sm:text-[32px]">DRAFT YOUR STARTING 5</p>
+          <p className="m-0 mt-1 text-[24px] text-white">ARCADE DRAFT: 8 pulls of the slot machine. FULL DRAFT: a real draft against 7 CPU teams.</p>
         </section>
         {last && (() => {
           const grade = draftGrade(teamRating(last, dex)!);
@@ -350,31 +473,48 @@ export function DraftPage() {
                 })}
               </div>
               <div className="ml-auto flex flex-wrap gap-2">
-                <button className="px-btn !bg-gold !text-black" onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}>SIM A GAME <Arrow /></button>
+                <button className="px-btn !bg-gold !text-black" onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}>TEST YOUR TEAM <Arrow /></button>
                 <button className="px-btn" onClick={() => (selectBlip(), setShowResults(true))}>VIEW RESULTS</button>
               </div>
             </section>
           );
         })()}
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-3">
           <button
             className="offer flex cursor-pointer flex-col gap-2 border-4 border-gold bg-night p-4 text-left"
             style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}
             onClick={() => begin(true)}
           >
-            <span className="font-head text-[24px] text-gold">DAILY DRAFT</span>
+            <span className="font-head text-[24px] text-gold">DAILY ARCADE</span>
             <span className="text-[24px] leading-[1.2] text-white">Today's offers ({dateLabel(today)}), the same for everyone. Classic pool. Compare grades with friends.</span>
             <span className="mt-2 self-start border-2 border-black bg-gold px-3 py-1 text-[24px] text-black">START <Arrow /></span>
           </button>
           <div className="flex flex-col gap-2 border-4 border-sky bg-night p-4" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
-            <span className="font-head text-[24px] text-sky">QUICK DRAFT</span>
-            <span className="text-[24px] leading-[1.2] text-white">New offers every time. Choose the pool:</span>
+            <span className="font-head text-[24px] text-sky">QUICK ARCADE</span>
+            <span className="text-[24px] leading-[1.2] text-white">New pulls every time. Choose the pool:</span>
             <span className="flex gap-1" role="group" aria-label="Pool">
               {(["classic", "unlimited"] as const).map((m) => (
                 <button key={m} className="px-btn" aria-pressed={quickMode === m} onClick={() => setQuickMode(m)}>{m}</button>
               ))}
             </span>
             <button className="offer mt-2 cursor-pointer self-start border-2 border-black bg-sky px-3 py-1 text-[24px] text-black" onClick={() => begin(false)}>
+              START <Arrow />
+            </button>
+          </div>
+          <div className="flex flex-col gap-2 border-4 border-red bg-night p-4" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
+            <span className="font-head text-[24px] text-red">FULL DRAFT</span>
+            <span className="text-[24px] leading-[1.2] text-white">A real draft: a lottery sets the order, 7 CPU teams pick too. Choose the pool:</span>
+            <span className="flex gap-1" role="group" aria-label="Full draft pool">
+              {(["classic", "unlimited"] as const).map((m) => (
+                <button key={m} className="px-btn" aria-pressed={fullMode === m} onClick={() => setFullMode(m)}>{m}</button>
+              ))}
+            </span>
+            <button className="offer mt-2 cursor-pointer self-start border-2 border-black bg-red px-3 py-1 text-[24px] text-white" onClick={() => {
+                selectBlip();
+                const seed = Date.now() >>> 0;
+                if (ARCADE.price.perDraft >= 1) draftDev.set("price.seed", seed % 100000); // new price tweaks for this draft
+                setFull({ mode: fullMode, seed });
+              }}>
               START <Arrow />
             </button>
           </div>
@@ -391,7 +531,7 @@ export function DraftPage() {
             </div>
           ))}
         </section>
-        <p className="mt-3 text-[20px] text-cloud">{DRAFT_REROLLS} rerolls per draft: press R to swap a round's offers. Every offer is one you can afford.</p>
+        <p className="mt-3 text-[20px] text-cloud">ARCADE: {DRAFT_REROLLS} re-spins per draft (R). Better ranks are rarer, but most pulls land a STAR. Every Pokémon offered is one you can afford.</p>
         </div>
       </div>
     );
@@ -457,11 +597,11 @@ export function DraftPage() {
           </div>
           {/* straight to Pre-Game with this team picked */}
           <button
-            className="offer cursor-pointer border-4 border-black bg-gold px-6 py-4 font-head text-[24px] text-black sm:text-[32px]"
+            className="offer flash-outline cursor-pointer border-4 border-black bg-gold px-6 py-4 font-head text-[24px] text-black sm:text-[32px]"
             style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}
             onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}
           >
-            SIM A GAME <Arrow />
+            TEST YOUR TEAM <Arrow />
           </button>
         </section>
 
@@ -519,14 +659,14 @@ export function DraftPage() {
                 </div>
                 <span className="mt-1 text-[24px] leading-[24px] text-gold">CHEMISTRY</span>
                 <ChemistryList lineup={lineup} dex={dex} />
+                <button className="px-btn mt-2 w-full" onClick={onSave}>SAVE TEAM</button>
               </>,
             )}
             {panel(
-              "SAVE & SHARE",
+              "SHARE",
               <div className="grid grid-cols-2 gap-2">
-                <button className="px-btn" onClick={onSave}>SAVE TEAM</button>
                 <button className="px-btn" onClick={onCopy}>{draft.daily ? "COPY RESULT" : "COPY LINK"}</button>
-                <button className="px-btn col-span-2" onClick={() => (selectBlip(), setSharing(true))}>SHARE CARD</button>
+                <button className="px-btn" onClick={() => (selectBlip(), setSharing(true))}>SHARE CARD</button>
               </div>,
             )}
             {panel(
@@ -560,58 +700,139 @@ export function DraftPage() {
 
   // ── a round ────────────────────────────────────────────────────────────
   const budget = budgetFor(toLineup(draft), openSlots(draft)[0], dex);
+  // faces to flick past on each spinning reel (just for show)
+  const reelFaces = draft.offers.map((_, i) => Array.from({ length: 6 }, (_, k) => data[(draft.deals * 97 + i * 31 + k * 53) % data.length]));
   const placing = selected != null ? dex.get(selected) : undefined;
   return (
-    <div className="mx-auto max-w-[1200px] p-4">
+    <div className="mx-auto max-w-[1200px] px-4 py-2">
       {header}
-      <section className="mb-4 border-4 border-black bg-navy" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
-        <div className="flex flex-wrap items-end justify-between gap-3 px-4 pb-3 pt-4">
-          <div>
-            <p className="m-0 text-[24px] text-cloud">
-              ROUND {draft.round + 1} OF {SLOTS.length}
-              {draft.daily ? ` · DAILY ${dateLabel(draft.seed)}` : ` · ${draft.mode.toUpperCase()}`}
-            </p>
-            <p className="m-0 font-head text-[24px] leading-[1.3] text-gold sm:text-[32px]">
-              {placing
-                ? `PLACE ${placing.name.toUpperCase()}`
-                : spot != null
-                  ? `PICK YOUR ${spot < STARTERS ? SLOTS[spot] : "BENCH PLAYER"}`
-                  : "PICK A POKéMON"}
-            </p>
-            <p className="m-0 text-[20px] text-cloud">
-              {placing
-                ? "CLICK A SPOT ON YOUR ROSTER · ENTER = BEST FIT · ESC = CHANGE PICK"
-                : spot != null
-                  ? "RATINGS SHOWN FOR THAT SPOT · ESC = CHANGE SPOT"
-                  : "PICK ONE, THEN CHOOSE ITS SPOT · OR PICK A SPOT BELOW FIRST"}
-            </p>
-          </div>
-          <button className="px-btn" onClick={doReroll} disabled={draft.rerolls <= 0 || !!call}>
-            REROLL ({draft.rerolls}) <span className="hidden sm:inline">[R]</span>
-          </button>
+      <section className="mb-2 flex flex-wrap items-center gap-x-5 gap-y-1 border-4 border-black bg-navy px-3 py-2" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
+        <div className="min-w-0">
+          <p className="m-0 text-[20px] leading-[20px] text-cloud">
+            ROUND {draft.round + 1} OF {SLOTS.length}
+            {draft.daily ? ` · DAILY ${dateLabel(draft.seed)}` : ` · ${draft.mode.toUpperCase()}`}
+          </p>
+          <p className="m-0 font-head text-[18px] leading-[26px] text-gold">
+            {revealed !== draft.deals && !spinning
+              ? "PULL THE HANDLE!"
+              : spinning
+                ? "SPINNING…"
+                : placing
+                  ? `PLACE ${placing.name.toUpperCase()}`
+                  : spot != null
+                    ? `PICK YOUR ${spot < STARTERS ? SLOTS[spot] : "BENCH PLAYER"}`
+                    : "PICK A POKéMON"}
+          </p>
+          <p className="m-0 text-[18px] leading-[18px] text-cloud">
+            {placing
+              ? "CLICK A SPOT ON YOUR ROSTER · ENTER = BEST FIT · ESC = CHANGE PICK"
+              : spot != null
+                ? "RATINGS SHOWN FOR THAT SPOT · ESC = CHANGE SPOT"
+                : "PICK ONE, THEN ITS SPOT · OR A SPOT BELOW FIRST"}
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 bg-night px-4 py-3">
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1">
           <CapMeter used={payroll(toLineup(draft), dex)} />
-          <span className="text-[24px] text-lime">BUDGET THIS PICK ${budget}M</span>
+          <span className="text-[22px] text-lime">BUDGET ${budget}M</span>
+          <button className="px-btn !py-0 !text-[20px]" onClick={doReroll} disabled={draft.rerolls <= 0 || !!call}>
+            RE-SPIN ({draft.rerolls}) <span className="hidden sm:inline">[R]</span>
+          </button>
         </div>
       </section>
 
-      <div className="relative">
-        <div key={draft.deals} className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {draft.offers.map((o, i) => (
-            <OfferCard
-              key={o.id}
-              offer={o}
-              p={dex.get(o.id)!}
-              index={i}
-              state={call ? (call.id === o.id ? "picked" : "passed") : selected === o.id ? "selected" : "open"}
-              chem={chemPreview(draft, o.id, dex)}
-              spot={spot ?? undefined}
-              onPick={() => choose(o.id)}
-              onStats={() => setStats(dex.get(o.id)!)}
-            />
-          ))}
+      {/* the slot machine: a gold cabinet under a JACKPOT sign, three reels, a control deck, a big gold handle */}
+      <div className="relative flex">
+        <div className="min-w-0 flex-1">
+          {/* the sign: a stepped gold arch (outlined in brown), a red panel with chasing bulbs */}
+          <div className="mx-auto w-[70%] bg-brown p-[4px]" style={{ clipPath: ARCH }}>
+            <div className="px-[6%] pb-[6px] pt-[12px]" style={{ ...GOLD, clipPath: ARCH }}>
+              <div className="border-4 border-brown bg-maroon px-2 py-[2px]">
+                <Lights n={18} />
+                <p className="m-0 text-center font-head text-[20px] leading-[26px] text-gold" style={{ textShadow: `2px 2px 0 ${PALETTE.red}, 4px 4px 0 ${PALETTE.black}` }}>JACKPOT</p>
+                <Lights n={18} />
+              </div>
+            </div>
+          </div>
+          {/* the body: a brown outline round gold, both with pixel-rounded corners, and a hard drop shadow */}
+          <div style={{ filter: `drop-shadow(6px 6px 0 ${PALETTE.black})` }}>
+          <div className="bg-brown p-[4px]" style={{ clipPath: corners(4) }}>
+          <section className="relative p-[12px]" style={{ ...GOLD, clipPath: corners(3) }}>
+            <Shine />
+            {/* the reel window, sunk into the gold */}
+            <div className="relative bg-brown p-[8px]" style={{ boxShadow: `inset 0 0 0 4px ${PALETTE.amber}`, clipPath: corners(3) }}>
+              <Lights />
+              <div className="my-[6px] grid grid-cols-1 gap-[6px] sm:grid-cols-3">
+                {draft.offers.map((o, i) => {
+                  const landed = revealed === draft.deals || (spinning && i < stopped);
+                  if (!landed && spinning) return <SpinReel key={`spin${i}`} faces={reelFaces[i] ?? []} />;
+                  if (!landed)
+                    return (
+                      <button key={`idle${i}`} className="flex h-[284px] items-center justify-center border-4 border-amber bg-cream font-head text-[64px] text-red" onClick={pull}>
+                        ?
+                      </button>
+                    );
+                  return (
+                    <div key={o.id} className={`relative ${o.tier === "STAR" ? "slot-star" : ""}`}>
+                      <OfferCard
+                        offer={o}
+                        p={dex.get(o.id)!}
+                        index={i}
+                        state={call ? (call.id === o.id ? "picked" : "passed") : selected === o.id ? "selected" : "open"}
+                        chem={chemPreview(draft, o.id, dex)}
+                        spot={spot ?? undefined}
+                        onPick={() => choose(o.id)}
+                        onStats={() => setStats(dex.get(o.id)!)}
+                      />
+                      {o.tier === "STAR" && revealed !== draft.deals && (
+                        <span className="pop pointer-events-none absolute left-1/2 top-[90px] -translate-x-1/2 border-4 border-black bg-gold px-3 py-1 font-head text-[24px] text-black">STAR!</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <Lights />
+            </div>
+            {/* the control deck: the WIN plate, three buttons, the coin tray */}
+            <div className="relative mt-[8px] flex items-center justify-center gap-[14px]">
+              <span className="border-4 border-brown bg-black px-4 py-[6px] font-head text-[14px] text-gold" style={{ boxShadow: `inset 0 0 0 2px ${PALETTE.maroon}` }}>
+                {revealed !== draft.deals ? (spinning ? "GOOD LUCK!" : "PULL!") : draft.offers.some((o) => o.tier === "STAR") ? "STAR!" : "PICK ONE!"}
+              </span>
+              {[0, 1, 2].map((k) => (
+                <span key={k} className="relative h-[20px] w-[28px] border-4 border-brown bg-amber" style={{ boxShadow: `inset 0 -4px 0 ${PALETTE.orange}` }}>
+                  <span className="absolute left-[3px] top-[2px] h-[3px] w-[6px] bg-white" />
+                </span>
+              ))}
+              <span className="h-[22px] w-[120px] border-4 border-brown bg-black" style={{ boxShadow: `inset 0 6px 0 ${PALETTE.brown}` }} />
+            </div>
+          </section>
+          </div>
+          </div>
         </div>
+        {/* the handle: a gold mount on the cabinet's side and a big gold lever with the ball on top. Pull it to spin
+            (or, with the reels showing, to spend a re-spin) */}
+        <button
+          className="relative flex w-[64px] shrink-0 flex-col items-center justify-end pb-[34px] disabled:opacity-60"
+          onClick={revealed === draft.deals ? doReroll : pull}
+          disabled={spinning || !!call || (revealed === draft.deals && draft.rerolls <= 0)}
+          aria-label={revealed === draft.deals ? `Re-spin (${draft.rerolls} left)` : "Pull the handle"}
+        >
+          {/* in perspective: the arm swings down toward you round its base; the ball keeps facing you, so it grows */}
+          <span className="lever">
+            <span className={`lever-arm flex flex-col items-center ${lever ? "lever-pull" : ""}`}>
+              <img className="lever-ball" src={BALL_URL} width={64} height={64} alt="" style={{ imageRendering: "pixelated" }} />
+              <span className="relative h-[230px] w-[18px] border-4 border-brown" style={{ ...GOLD, boxShadow: `inset 4px 0 0 ${PALETTE.cream}, inset -4px 0 0 ${PALETTE.amber}` }}>
+                <span className="absolute left-[2px] top-[10px] h-[60%] w-[2px] bg-white" />
+              </span>
+            </span>
+          </span>
+          {/* the mount, bolted to the cabinet */}
+          <span className="relative -ml-[24px] h-[70px] w-[52px] bg-brown p-[4px]" style={{ clipPath: corners(3) }}>
+            <span className="absolute inset-[4px]" style={{ ...GOLD, clipPath: corners(2) }} />
+            <span className="absolute left-[4px] top-[4px] h-[4px] w-[4px] bg-white" />
+            <span className="absolute bottom-[6px] right-[6px] h-[6px] w-[6px] border-2 border-brown bg-amber" />
+          </span>
+          <span className="absolute bottom-[8px] text-center font-head text-[10px] text-gold">{revealed === draft.deals ? `RE-SPIN ${draft.rerolls}` : "PULL!"}</span>
+        </button>
         {call && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center" role="status">
             <span className="pop border-4 border-black bg-black px-5 py-3 font-head text-[24px] text-gold sm:text-[32px]">{call.text}</span>
@@ -619,9 +840,10 @@ export function DraftPage() {
         )}
       </div>
 
-      <h2 className="mb-2 mt-5 font-head text-[16px] text-cloud">YOUR ROSTER</h2>
-      <Roster draft={draft} dex={dex} placing={call ? undefined : placing} onPlace={(s) => place(s)} spot={spot} onSpot={call ? undefined : chooseSpot} />
+      <h2 className="mb-1 mt-3 font-head text-[12px] text-cloud">YOUR ROSTER</h2>
+      <Roster draft={draft} dex={dex} placing={call ? undefined : placing} onPlace={(s) => place(s)} spot={spot} onSpot={call ? undefined : chooseSpot} onStats={setStats} />
       {stats && <PlayerModal p={stats} onClose={() => setStats(null)} />}
+      {devMenu}
     </div>
   );
 }

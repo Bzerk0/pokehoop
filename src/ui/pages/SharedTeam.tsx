@@ -6,9 +6,11 @@ import { CARD_H, CARD_W, COLOR_NAMES, LineupCard } from "../components/LineupCar
 import { PixelStage } from "../components/PixelStage.tsx";
 import { useRated } from "../data.ts";
 import { selectBlip } from "../sound.ts";
+import { useMusic } from "../bgm.ts";
 
 /** /t/<code>: someone's shared team, read-only, with a button to copy it into your own builder. */
 export function SharedTeam() {
+  useMusic("menu");
   const { code = "" } = useParams();
   const navigate = useNavigate();
   const { data, error } = useRated();

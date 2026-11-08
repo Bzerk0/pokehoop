@@ -6,8 +6,8 @@ import type { RatedPokemon } from "./types.ts";
 
 export type Difficulty = (typeof DIFFICULTIES)[number]["name"];
 
-const PLACES = ["CERULEAN", "VERMILION", "SAFFRON", "ECRUTEAK", "LAVARIDGE", "SNOWPOINT", "NIMBASA", "LUMIOSE", "HAU'OLI", "MOTOSTOKE", "MESAGOZA", "PEWTER", "GOLDENROD", "MAUVILLE"];
-const MASCOTS = ["TIDE", "VIPERS", "THUNDER", "EMBERS", "GALE", "BOULDERS", "PHANTOMS", "COMETS", "BLIZZARD", "WILDCATS", "DYNAMOS", "STAMPEDE", "SPARKS", "TITANS"];
+export const PLACES = ["CERULEAN", "VERMILION", "SAFFRON", "ECRUTEAK", "LAVARIDGE", "SNOWPOINT", "NIMBASA", "LUMIOSE", "HAU'OLI", "MOTOSTOKE", "MESAGOZA", "PEWTER", "GOLDENROD", "MAUVILLE"];
+export const MASCOTS = ["TIDE", "VIPERS", "THUNDER", "EMBERS", "GALE", "BOULDERS", "PHANTOMS", "COMETS", "BLIZZARD", "WILDCATS", "DYNAMOS", "STAMPEDE", "SPARKS", "TITANS"];
 
 export const difficultyOf = (name: Difficulty) => DIFFICULTIES.find((d) => d.name === name)!;
 export const allowedIn = (name: Difficulty, mode: Mode) => mode === "unlimited" || !difficultyOf(name).unlimitedOnly;

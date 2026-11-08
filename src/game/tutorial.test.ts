@@ -56,7 +56,7 @@ describe("HOW TO PLAY", () => {
         if (title === "DUNK") Object.assign(inp, { x: (hoop.x - you.x) / d, y: (hoop.y - you.y) / d, turbo: true, shoot: d < LIVE.dunkRange - 0.4 });
         if (title === "PASS") inp.steal = true; // J
         if (title === "CALL A PLAY" && t % 1 < DT) callPlay(g, 0, "MOTION"); // what Q → ENTER does
-        if (title === "DEFEND") inp.cross = Math.floor(t * 4) % 2 === 0; // swipe at it (L steals on defence)
+        if (title === "DEFEND") inp.cross = Math.floor(t * 4) % 2 === 0; // swipe at it (a double tap of sprint steals)
       }
       const between = g.events.slice(before); // a menu call happens between steps, as in LiveView
       const cpuIdle = !tu.cpuPlays;

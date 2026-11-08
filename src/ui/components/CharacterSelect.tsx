@@ -53,6 +53,22 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
 
   const all = useMemo(() => [...dex.values()], [dex]);
 
+  /** Over a picked Pokémon: a grey layer with its pick number and how many are picked; once enough are, PLAY.
+   *  Clicking the layer unpicks it. */
+  const picked = (id: number) =>
+    picks.includes(id) && (
+      <div className="absolute inset-0 z-10 flex cursor-pointer flex-col items-center justify-center gap-1 bg-fog/60" onClick={() => toggle(id)}>
+        <span className="bg-black px-1 font-head text-[10px] leading-[16px] text-gold">P{picks.indexOf(id) + 1}</span>
+        {full ? (
+          <button className="px-btn !bg-gold !py-0 !text-[22px] !text-black" onClick={(e) => (e.stopPropagation(), selectBlip(), onStart(picks))}>
+            PLAY <Arrow />
+          </button>
+        ) : (
+          <span className="bg-black px-2 font-head text-[10px] leading-[18px] text-white">{picks.length}/{size} SELECTED</span>
+        )}
+      </div>
+    );
+
   /** One of your team's 8 spots, drawn like Free Build's. */
   const tile = (slot: number, color: string) => {
     const p = dex.get(lineup.ids[slot] ?? -1);
@@ -76,7 +92,8 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
         <span className="line-clamp-2 min-h-[36px] break-words text-center text-[20px] leading-[18px] text-white">{p.name}</span>
         <span className="text-center">{tag(p.id)}</span>
       </button>
-      <StatsButton p={p} onOpen={() => setStats(p)} className="absolute -bottom-[12px] -right-[12px]" />
+      {picked(p.id)}
+      <StatsButton p={p} onOpen={() => setStats(p)} className="absolute -bottom-[12px] -right-[12px] z-20" />
       </div>
     );
   };
@@ -138,6 +155,7 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
           onCard={(p) => toggle(p.id)}
           onStats={setStats}
           tagOf={(p) => (picks.includes(p.id) ? `P${picks.indexOf(p.id) + 1}` : undefined)}
+          overlayOf={(p) => picked(p.id)}
         />
       </div>
       {stats && <PlayerModal p={stats} onClose={() => setStats(null)} />}

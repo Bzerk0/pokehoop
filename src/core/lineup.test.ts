@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { SALARY_CAP, SALARY_MAX, SALARY_MIN } from "./ratingConfig.ts";
+import { ARCADE, SALARY_CAP, SALARY_MAX, SALARY_MIN } from "./ratingConfig.ts";
 import {
   autoFill,
   budgetFor,
@@ -73,11 +73,28 @@ describe("rules and warnings", () => {
 });
 
 describe("salary cap", () => {
-  it("salaries rise with best OVR, from SALARY_MIN to SALARY_MAX", () => {
+  it("salaries rise with best OVR, from SALARY_MIN to SALARY_MAX (with the per-Pokémon tweak off)", () => {
+    const vary = ARCADE.price.vary;
+    ARCADE.price.vary = 0;
     const sorted = [...pool].sort((a, b) => a.ovr[a.best] - b.ovr[b.best]);
     for (let i = 1; i < sorted.length; i++) expect(salary(sorted[i])).toBeGreaterThanOrEqual(salary(sorted[i - 1]));
     expect(salary(sorted[0])).toBe(SALARY_MIN);
     expect(salary(sorted[sorted.length - 1])).toBe(SALARY_MAX);
+    ARCADE.price.vary = vary;
+  });
+  it("Pokémon of the same rating don't all cost the same, but stay within the tweak and the same every time", () => {
+    const at = pool.filter((p) => p.ovr[p.best] === 80);
+    const prices = new Set(at.map(salary));
+    expect(prices.size).toBeGreaterThan(2);
+    ARCADE.price.vary = 0;
+    const flat = salary(at[0]);
+    ARCADE.price.vary = 0.12;
+    for (const p of at) expect(Math.abs(salary(p) - flat)).toBeLessThanOrEqual(Math.ceil(flat * 0.12) + 1);
+    expect(salary(at[0])).toBe(salary(at[0]));
+    const before = at.map(salary);
+    ARCADE.price.seed = 7; // a new deal of tweaks (what price.perDraft does each draft)
+    expect(at.map(salary)).not.toEqual(before);
+    ARCADE.price.seed = 0;
   });
   it("a team of stars is over the cap, and that's a problem", () => {
     const stars = team(["groudon", "kyogre", "rayquaza", "dialga", "palkia"]);

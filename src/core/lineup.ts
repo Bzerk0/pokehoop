@@ -2,6 +2,7 @@
 // a pool mode. Pure: no React, no storage. Tuning numbers live in ratingConfig.ts.
 import { chemistry } from "./chemistry.ts";
 import {
+  ARCADE,
   ATTR_MAX,
   OVR_MAX,
   OVR_MIN,
@@ -48,7 +49,12 @@ export const slotOvr = (slot: number, p: RatedPokemon) => p.ovr[slotPosition(slo
 /** Salary in $M, from the Pokémon's best OVR: cheap role players, very expensive stars. */
 export function salary(p: RatedPokemon): number {
   const t = Math.max(0, (p.ovr[p.best] - OVR_MIN) / (OVR_MAX - OVR_MIN));
-  return Math.round(SALARY_MIN + (SALARY_MAX - SALARY_MIN) * t ** SALARY_CURVE);
+  const base = SALARY_MIN + (SALARY_MAX - SALARY_MIN) * t ** SALARY_CURVE;
+  // not every Pokémon of a rank costs the same: a fixed tweak per Pokémon, ± up to ARCADE.price.vary (from its number
+  // and the price seed: a hash, not a random draw, so the same Pokémon always costs the same)
+  const { vary, seed } = ARCADE.price, h = Math.sin(p.id * 12.9898 + seed * 78.233) * 43758.5453;
+  const tweak = (h - Math.floor(h)) * 2 - 1;
+  return Math.min(SALARY_MAX, Math.max(SALARY_MIN, Math.round(base * (1 + vary * tweak))));
 }
 
 type Dex = Map<number, RatedPokemon>;

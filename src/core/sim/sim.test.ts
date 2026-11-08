@@ -67,10 +67,10 @@ describe("sim (PLAN.md §9)", () => {
     }
   });
 
-  it("over 1,000 games the average team score is 75–110, and a team 15 OVR better wins 75–90%", () => {
+  it("over 2,000 games the average team score is 75–110, and a team 15 OVR better wins 75–90%", () => {
     const rng = makeRng(15);
     let points = 0, played = 0, favWins = 0;
-    for (let g = 0; g < 1000; g++) {
+    for (let g = 0; g < 2000; g++) {
       const a = team(rng.pick(DIFFICULTIES).name, rng.int(1e9));
       const b = team(rng.pick(DIFFICULTIES).name, rng.int(1e9));
       const r = simGame(a, b, dex, rng.int(1e9));
@@ -82,12 +82,12 @@ describe("sim (PLAN.md §9)", () => {
         if ((gap > 0) === (h > w)) favWins++;
       }
     }
-    expect(points / 2000).toBeGreaterThanOrEqual(75);
-    expect(points / 2000).toBeLessThanOrEqual(110);
-    expect(played).toBeGreaterThan(50);
+    expect(points / 4000).toBeGreaterThanOrEqual(75);
+    expect(points / 4000).toBeLessThanOrEqual(110);
+    expect(played).toBeGreaterThan(100); // enough close-to-15 games that one result doesn't tip it
     expect(favWins / played).toBeGreaterThanOrEqual(0.75);
     expect(favWins / played).toBeLessThanOrEqual(0.9);
-  }, 60_000);
+  }, 90_000);
 
   it("simRest finishes a game from any state (here, tip-off)", () => {
     const [a, b] = [team("ROOKIE", 5), team("CHAMPION", 6)];

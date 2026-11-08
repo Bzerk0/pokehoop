@@ -381,6 +381,40 @@ canvas {
 .t-logo-late { animation: t-logo 800ms steps(12) 450ms both; }
 .t-whiteout-late { visibility: hidden; animation: t-whiteout-late 1000ms steps(1) both; }
 @keyframes t-whiteout-late { 0% { visibility: hidden; } 90% { visibility: visible; } 98% { visibility: hidden; } 100% { visibility: hidden; } }
+/* the arcade draft's slot machine (DraftPage.tsx) */
+.slot-spin { animation: slot-spin 0.24s steps(6) infinite; }
+@keyframes slot-spin { to { transform: translateY(-50%); } }
+.slot-star { outline: 4px solid var(--color-gold); outline-offset: 2px; animation: slot-star 1.2s steps(1) both; }
+@keyframes slot-star { 0%, 20%, 40%, 60%, 100% { outline-color: var(--color-gold); } 10%, 30%, 50% { outline-color: var(--color-white); } }
+.lever { display: block; perspective: 260px; perspective-origin: 50% 40%; }
+.lever-arm { transform-origin: 50% 100%; transform-style: preserve-3d; }
+.lever-ball { transform-origin: 50% 100%; }
+/* the arm tips toward you round its base and springs back; the ball turns the other way so it always faces you */
+.lever-pull { animation: lever-arm 0.65s both; }
+.lever-pull .lever-ball { animation: lever-ball 0.65s both; }
+@keyframes lever-arm {
+  0% { transform: rotateX(0deg); animation-timing-function: ease-in; }
+  35%, 50% { transform: rotateX(-60deg); animation-timing-function: ease-out; }
+  82% { transform: rotateX(9deg); animation-timing-function: ease-in-out; }
+  100% { transform: rotateX(0deg); }
+}
+@keyframes lever-ball {
+  0% { transform: rotateX(0deg); animation-timing-function: ease-in; }
+  35%, 50% { transform: rotateX(60deg); animation-timing-function: ease-out; }
+  82% { transform: rotateX(-9deg); animation-timing-function: ease-in-out; }
+  100% { transform: rotateX(0deg); }
+}
+/* a call to action: the outline blinks white / red in hard steps (no fade) */
+.flash-outline {
+  outline: 4px solid var(--color-white);
+  outline-offset: 3px;
+  animation: flash-outline 0.8s steps(1) infinite;
+}
+@keyframes flash-outline {
+  50% { outline-color: var(--color-red); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .t-anim { animation: none !important; }
+  .flash-outline { animation: none; }
+  .t-anim, .slot-spin, .slot-star, .lever-pull, .lever-pull .lever-ball { animation: none !important; }
 }

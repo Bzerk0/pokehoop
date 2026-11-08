@@ -40,6 +40,8 @@ export type ApiSpecies = {
   varieties: { is_default: boolean; pokemon: Named & { url: string } }[];
 };
 export type ApiPokemon = {
+  id: number;
+  name: string;
   height: number;
   weight: number;
   types: { slot: number; type: Named }[];
