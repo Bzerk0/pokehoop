@@ -17,6 +17,9 @@ export type GameState = {
   poss: number; // possessions played this period (both teams)
   offense: 0 | 1;
   highlights: Highlight[];
+  /** Possessions × this (1 = the sim's own pace). A live game handed over sets it to the live game's slower pace,
+   *  so the rest is played at the same scoring scale. */
+  pace?: number;
 };
 export type Highlight = { period: number; text: string; weight: number; kind: string };
 export type GameResult = { teams: [TeamBox, TeamBox]; highlights: string[] };
@@ -58,7 +61,7 @@ const rate = (p: SimPlayer, k: keyof Attributes) => p.a[k] * (SIM.tiredFloor + (
 /** Possessions per period for both teams together (each team gets half), from the pace of all ten starters. */
 function periodPossessions(s: GameState) {
   const speed = avg(s.teams.flatMap((t) => t.players.slice(0, POSITIONS.length).map((p) => p.a.speed)));
-  const perTeam = SIM.possessions * (1 + SIM.paceSwing * ((speed - 50) / 50));
+  const perTeam = SIM.possessions * (1 + SIM.paceSwing * ((speed - 50) / 50)) * (s.pace ?? 1);
   const share = s.period < 4 ? 1 / 4 : (1 / 4) * (SIM.overtimeSec / SIM.quarterSec);
   return 2 * Math.max(1, Math.round(perTeam * share));
 }
@@ -197,6 +200,15 @@ export function simRest(state: GameState, seed: number): GameResult {
   const top = lines.reduce((x, y) => (y.l.pts > x.l.pts ? y : x));
   picked.push(`${top.name} led all scorers with ${top.l.pts}.`);
   return { teams: [s.teams[0].box, s.teams[1].box], highlights: picked };
+}
+
+/** Finish a game the live game hands over part-way: `state` carries its box scores, energies and who's on court;
+ *  `elapsed` is the share of the current `period` already played. */
+export function simFrom(state: GameState, period: number, elapsed: number, seed: number): GameResult {
+  const s: GameState = structuredClone(state);
+  s.period = period;
+  s.poss = Math.min(periodPossessions(s), Math.round(periodPossessions(s) * Math.max(0, Math.min(1, elapsed))));
+  return simRest(s, seed);
 }
 
 /** A whole game from tip-off. Same lineups and seed, same game. */

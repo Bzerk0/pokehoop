@@ -6,6 +6,7 @@ import { clock, score } from "../../core/stats.ts";
 import { blip } from "../sound.ts";
 import { inkOn, PALETTE } from "../theme/palette.ts";
 import { teamColor } from "./LineupCard.tsx";
+import { Arrow } from "./Arrow.tsx";
 
 // The game is already decided; this plays it back fast so the result lands with some drama.
 const INTRO_MS = 1100; // teams walk out, TIP-OFF!
@@ -121,7 +122,7 @@ export function TipOff({ result, home, away, onDone }: { result: GameResult; hom
           </>
         )}
 
-        <button className="px-btn self-end" onClick={finish}>SKIP ▶▶</button>
+        <button className="px-btn self-end" onClick={finish}>SKIP <Arrow /><Arrow /></button>
       </div>
     </div>
   );

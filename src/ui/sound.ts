@@ -28,6 +28,42 @@ export function blip(freq = 660, ms = 45, volume = 0.05) {
   }
 }
 
+/** A run of notes [hz, seconds], brassy (a filtered sawtooth); `wobble` adds a sad vibrato to the last one. */
+function tune(notes: [number, number][], volume = 0.08, wobble = false) {
+  const ctx = audio();
+  if (!ctx) return;
+  let t = ctx.currentTime + 0.02;
+  notes.forEach(([hz, len], i) => {
+    const osc = ctx.createOscillator(), gain = ctx.createGain(), filter = ctx.createBiquadFilter();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(hz, t);
+    filter.type = "lowpass";
+    filter.frequency.value = 1400;
+    if (wobble && i === notes.length - 1) {
+      const lfo = ctx.createOscillator(), depth = ctx.createGain();
+      lfo.frequency.value = 6;
+      depth.gain.value = hz * 0.03;
+      lfo.connect(depth).connect(osc.frequency);
+      lfo.start(t);
+      lfo.stop(t + len);
+      osc.frequency.linearRampToValueAtTime(hz * 0.94, t + len); // and sag at the end
+    }
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(volume, t + 0.03);
+    gain.gain.setValueAtTime(volume, t + len - 0.08);
+    gain.gain.linearRampToValueAtTime(0, t + len);
+    osc.connect(filter).connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + len + 0.02);
+    t += len;
+  });
+}
+
+/** Womp womp womp wommmp: you lost. */
+export const womp = () => tune([[196, 0.32], [185, 0.32], [175, 0.32], [165, 1.1]], 0.09, true);
+/** Ta-da: you won. */
+export const fanfare = () => tune([[523, 0.12], [659, 0.12], [784, 0.12], [1047, 0.5]], 0.06);
+
 export const moveBlip = () => blip(660, 35);
 export const selectBlip = () => blip(990, 70);
 export const backBlip = () => blip(330, 60);

@@ -73,7 +73,13 @@ export function chemistry(l: Lineup, dex: Dex): { links: Link[]; boosts: number[
     if (trio.every(Boolean)) add(`${REGIONS[Number(gen) - 1]} STARTERS`, trio as typeof on, CHEM.starterTrio);
   }
 
-  for (const [type, members] of groups((p) => p.types)) if (members.length >= 3) add(`${type.toUpperCase()} TRIO`, members, CHEM.typeTrio);
+  // same type: a trio, then bigger bonuses for ×4 … ×7, and the most for the whole squad of 8 (one link per type)
+  for (const [type, members] of groups((p) => p.types)) {
+    const n = members.length, t = type.toUpperCase();
+    if (n === 3) add(`${t} TRIO`, members, CHEM.typeTrio);
+    else if (n >= 4 && n < 8) add(`${t} ×${n}`, members, CHEM.typeMore[n - 4]);
+    else if (n >= 8) add(`ALL-${t} SQUAD`, members, CHEM.typeMore[4]);
+  }
 
   for (const [name, slugs] of PAIRS) {
     const members = on.filter((m) => slugs.includes(m.p.slug));

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { backBlip, moveBlip, selectBlip } from "../sound.ts";
+import { Arrow } from "./Arrow.tsx";
 
 export type MenuItem = { label: string; onSelect: () => void; note?: string };
 
@@ -38,7 +39,7 @@ export function Menu({ items, onBack, active = true }: { items: MenuItem[]; onBa
           onMouseEnter={() => i !== index && (setIndex(i), moveBlip())}
           onClick={() => (selectBlip(), item.onSelect())}
         >
-          <span className={`w-[10px] ${i === index ? "blink" : "invisible"}`}>▶</span>
+          <span className={`w-[10px] ${i === index ? "blink" : "invisible"}`}><Arrow /></span>
           <span>{item.label}</span>
           {item.note && <span className="text-fog">{item.note}</span>}
         </li>

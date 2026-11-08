@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "data": "tsx scripts/build-data.ts",
-    "balance": "tsx scripts/balance.ts"
+    "balance": "tsx scripts/balance.ts",
+    "balance:live": "tsx scripts/live-balance.ts"
   },
   "dependencies": {
     "@fontsource/press-start-2p": "^5.3.0",

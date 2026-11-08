@@ -23,6 +23,12 @@ describe("chemistry", () => {
   it("finds the starter trio, type trios, rival pairs and squads", () => {
     expect(names(team(["bulbasaur", "charmeleon", "blastoise"]))).toContain("KANTO STARTERS");
     expect(names(team(["pikachu", "jolteon", "magnezone"]))).toContain("ELECTRIC TRIO");
+    const four = names(team(["pikachu", "jolteon", "magnezone", "electabuzz"]));
+    expect(four).toContain("ELECTRIC ×4");
+    expect(four).not.toContain("ELECTRIC TRIO"); // the bigger bonus replaces the trio
+    const eight = team(["pikachu", "jolteon", "magnezone", "electabuzz", "raichu", "zapdos", "ampharos", "manectric"]);
+    expect(names(eight)).toContain("ALL-ELECTRIC SQUAD");
+    expect(chemistry(eight, dex).boosts.every((b) => b >= CHEM.typeMore[4])).toBe(true);
     expect(names(team(["nidoking", null, null, null, null, "nidoqueen"]))).toContain("ROYAL COUPLE");
     expect(names(team(["articuno", "zapdos", "moltres"]))).toContain("LEGENDARY BIRDS");
     expect(names(team(["articuno", "zapdos"]))).not.toContain("LEGENDARY BIRDS");

@@ -56,16 +56,22 @@ function SegmentBar({ value }: { value: number }) {
 }
 
 /** Small grid tile: sprite, name, types, big OVR. */
-export function MiniCard({ p, pos, onOpen }: { p: RatedPokemon; pos?: Position; onOpen: () => void }) {
+/** `tag` (e.g. "P1") marks the card as picked: a gold frame and the label in place of the dex number. */
+export function MiniCard({ p, pos, onOpen, tag }: { p: RatedPokemon; pos?: Position; onOpen: () => void; tag?: string }) {
   const shown = pos ?? p.best;
   return (
     <button
       onClick={onOpen}
-      className="flex cursor-pointer flex-col border-4 bg-night p-2 text-left hover:bg-navy"
-      style={{ borderColor: typeColor(p.types[0]), boxShadow: `3px 3px 0 ${PALETTE.black}` }}
+      aria-pressed={tag ? true : undefined}
+      className={`flex w-full cursor-pointer flex-col border-4 p-2 text-left hover:bg-navy ${tag ? "bg-navy" : "bg-night"}`}
+      style={{ borderColor: tag ? PALETTE.gold : typeColor(p.types[0]), boxShadow: `3px 3px 0 ${PALETTE.black}` }}
     >
       <span className="flex items-start justify-between">
-        <span className="font-head text-[8px] text-fog">#{String(p.id).padStart(4, "0")}</span>
+        {tag ? (
+          <span className="bg-gold px-1 font-head text-[10px] text-black">{tag}</span>
+        ) : (
+          <span className="font-head text-[8px] text-fog">#{String(p.id).padStart(4, "0")}</span>
+        )}
         <span className="text-right">
           <span className="block font-head text-[16px] text-gold">{p.ovr[shown]}</span>
           <span className="block font-head text-[8px] text-cloud">{shown}</span>

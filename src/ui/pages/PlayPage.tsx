@@ -18,6 +18,8 @@ import { useRated } from "../data.ts";
 import { backBlip, blip, selectBlip } from "../sound.ts";
 import type { ArcadeSetup } from "./ArcadePage.tsx";
 import { inkOn, PALETTE } from "../theme/palette.ts";
+import { Arrow } from "../components/Arrow.tsx";
+import { CharacterSelect } from "../components/CharacterSelect.tsx";
 
 type Dex = Map<number, RatedPokemon>;
 type Choice = { key: string; label: string; lineup: Lineup };
@@ -125,7 +127,8 @@ function BoxScore({ box, dex }: { box: TeamBox; dex: Dex }) {
   );
 }
 
-function Results({ result, dex, mine }: { result: GameResult; dex: Dex; mine: Lineup }) {
+/** The final: scoreboard, quarters, highlights and box scores. Simmed and live games both end here. */
+export function Results({ result, dex, mine }: { result: GameResult; dex: Dex; mine: Lineup }) {
   const [you, cpu] = result.teams;
   const won = score(you) > score(cpu);
   const periods = you.periods.map((_, i) => (i < 4 ? `Q${i + 1}` : i === 4 ? "OT" : `${i - 3}OT`));
@@ -208,6 +211,7 @@ export function PlayPage() {
   const [oppSeed, setOppSeed] = useState(() => Date.now());
   const [result, setResult] = useState<GameResult | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [selecting, setSelecting] = useState<1 | 3 | 5 | "solo" | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -234,25 +238,25 @@ export function PlayPage() {
     document.querySelector("main")?.scrollTo(0, 0);
   };
 
-  /** The live 1v1: each team's best starter (by OVR at their spot). Five-a-side live play comes in a later phase. */
-  const live = () => {
+  /** The live game, with the players you picked on the select screen (none picked: the five starters and bench). */
+  const live = (size: 1 | 3 | 5, tutorial = false, picks?: number[], solo = false, ids?: number[]) => {
     if (!mine || !cpu || !dex || !playable) return;
-    const star = (l: typeof mine) =>
-      [0, 1, 2, 3, 4].map((i) => dex.get(l.ids[i]!)!).sort((p, q) => q.ovr[q.best] - p.ovr[p.best])[0].id;
     const youColor = teamColor(mine.colors[0]);
     const cpuColor = teamColor(cpu.colors[0] === mine.colors[0] ? cpu.colors[1] : cpu.colors[0]);
     selectBlip();
-    navigate("/play/live", { state: { you: star(mine), cpu: star(cpu), youColor, cpuColor, level } satisfies ArcadeSetup });
+    navigate("/play/live", {
+      state: { home: { ...mine, ids: ids ?? mine.ids, name: mine.name || "YOU" }, away: cpu, size, picks, solo, youColor, cpuColor, level, tutorial } satisfies ArcadeSetup,
+    });
   };
 
   const header = (
     <div className="mb-3 flex items-center justify-between gap-3">
       <h1 className="m-0 flex items-center gap-2 font-head text-[16px] text-gold">
         <HomeLogo />
-        {result ? "FINAL" : "PRE-GAME"}
+        {result ? "FINAL" : selecting ? "CHARACTER SELECT" : "PRE-GAME"}
       </h1>
-      <button className="px-btn" onClick={() => (result ? setResult(null) : navigate("/", { state: { menu: true } }))}>
-        ◀ {result ? "PRE-GAME" : "BACK"}<span className="hidden sm:inline"> (ESC)</span>
+      <button className="px-btn" onClick={() => (result ? setResult(null) : selecting ? setSelecting(null) : navigate("/", { state: { menu: true } }))}>
+        <Arrow left /> {result || selecting ? "PRE-GAME" : "BACK"}<span className="hidden sm:inline"> (ESC)</span>
       </button>
     </div>
   );
@@ -293,6 +297,38 @@ export function PlayPage() {
     );
   }
 
+  if (selecting) {
+    return (
+      <div className="mx-auto max-w-[1200px] p-4">
+        {header}
+        <CharacterSelect
+          size={selecting === "solo" ? 1 : selecting}
+          solo={selecting === "solo"}
+          teams={teams.map((t) => ({ ...t, ready: ready(t.lineup, dex) }))}
+          team={pick}
+          setTeam={setPick}
+          dex={dex}
+          onStart={(ids) => {
+            if (!ids) return live(5); // ENTIRE TEAM
+            // the chosen Pokémon (from your team or the Pokédex) come first; the rest of your team is the bench.
+            // SOLO: 5 on 5 as your one pick, with your team's first four starters (other than you) beside you
+            const size = selecting === "solo" ? 5 : selecting;
+            const ids8 = [...ids, ...mine.ids.filter((id): id is number => id != null && !ids.includes(id))].slice(0, 8);
+            live(size, false, ids8.slice(0, size).map((_, i) => i), selecting === "solo", ids8);
+          }}
+          onBack={() => setSelecting(null)}
+        />
+      </div>
+    );
+  }
+
+  const modes = [
+    [1, "ONES", "One on one, first to 11"],
+    [3, "THREES", "3 on 3, a full timed game"],
+    [5, "FIVES", "5 on 5, the real thing"],
+    ["solo", "SOLO", "5 on 5 as one Pokémon (test)"],
+  ] as const;
+
   return (
     <div className="mx-auto max-w-[1200px] p-4">
       {header}
@@ -332,9 +368,22 @@ export function PlayPage() {
         {cpu && <TeamPanel lineup={cpu} dex={dex} tag={`CPU · ${level}`} />}
       </div>
 
-      <div className="mt-4 flex flex-wrap justify-center gap-3">
-        <button className="px-btn !text-[32px]" onClick={sim} disabled={!playable}>SIM GAME ▶</button>
-        <button className="px-btn !text-[32px]" onClick={live} disabled={!playable} title="Your best starter against theirs, live">PLAY 1V1 ▶</button>
+      <h2 className="mb-2 mt-5 text-center font-head text-[16px] text-gold">PLAY LIVE</h2>
+      <div className="grid gap-3 sm:grid-cols-4">
+        {modes.map(([size, name, blurb]) => (
+          <button key={size} className="px-btn flex flex-col items-center gap-2 !py-4" onClick={() => (selectBlip(), setSelecting(size))} disabled={!playable}>
+            <span className="font-head text-[24px] leading-[32px]">{name} <Arrow /></span>
+            <span className="text-[20px] normal-case">{blurb}</span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-2 flex justify-center">
+        <button className="px-btn !text-[20px]" onClick={() => live(3, true)} disabled={!playable} title="Learn the controls in a quick practice">HOW TO PLAY</button>
+      </div>
+
+      <div className="px-box mt-6 flex flex-wrap items-center justify-center gap-3 p-3">
+        <span className="text-[20px] text-cloud">NO TIME? THE CPU PLAYS IT OUT AND SHOWS YOU THE RESULT.</span>
+        <button className="px-btn" onClick={sim} disabled={!playable}>SIM GAME <Arrow /></button>
       </div>
     </div>
   );

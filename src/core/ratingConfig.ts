@@ -94,7 +94,8 @@ export const DRAFT_GRADES: [string, number][] = [
 export const CHEM = {
   family: 2, // 2+ from one evolution family
   starterTrio: 3, // the three starter lines of one region
-  typeTrio: 1, // 3+ sharing a type
+  typeTrio: 1, // 3 sharing a type
+  typeMore: [2, 2, 3, 3, 4], // 4, 5, 6, 7 and all 8 (the whole squad) sharing a type
   pair: 3, // rivals and partners (Nidoking + Nidoqueen …)
   squad: 2, // 3+ of a famous group (the legendary birds, Ash's partners …)
   region: 2, // whole team: all five starters from one region
@@ -138,7 +139,49 @@ export const SIM = {
 /** The live arcade game (PLAN.md §10; Phase 5 is 1v1). Metres and seconds. The court runs up the screen and you
  *  always attack the top hoop. Each make/miss/steal/block is a dice roll when it happens, then animated. */
 export const LIVE = {
-  targetScore: 11, // first to this wins
+  // the court's size × a real one (28.65 × 15.24 m): lines, three-point arc and where players stand all scale with
+  // it; the players don't, so a bigger court means more room. Trying 15% bigger (the user's test); 1 = real size
+  courtScale: 1.15,
+  targetScore: 11, // first to this wins (1v1)
+  targetBySize: { 1: 11, 3: 15, 5: 21 } as Record<number, number>, // first to this, by players a side
+  shotClock: 24, // seconds (the user's call; PLAN.md said 14); resets when the ball changes hands or a shot hits the rim
+  // gameplay aids
+  quickTap: 0.12, // let go of K this fast: a quick shot, no meter
+  quickClose: 0.15, // a quick shot's make chance gained right at the rim, fading out by quickCloseTo metres
+  quickCloseTo: 4,
+  quickSlope: 0.035, // a quick shot's make chance lost per metre beyond 1.5 m (little close in, a lot from deep)
+  quickMax: 0.4, // ... at most
+  blockNudge: 2.5, // a block jump drifts toward a shot going up nearby, up to this fast (m/s)
+  nudgeRange: 3.5, // ... if it's this close
+  chaseRange: 1.2, // a defender sprinting in from behind reaches this far for a block (a chase-down)
+  chaseBonus: 0, // ... and gets this much more block chance (more made a quarter of drives get swatted)
+  chaseSpeed: 4, // ... if moving at least this fast (m/s): a real sprint, not a jog back
+  // passing (Phase 6): J passes to the teammate you face, 1–5 to a spot
+  passMin: 9, // pass speed m/s at Passing 0
+  passMax: 15, // ... at Passing 99
+  passError: 0.1, // a Passing-0 pass lands up to this share of its length off target
+  catchRange: 1.2, // the receiver catches it within this of where it arrives
+  interceptRange: 0.8, // a defender this close to a pass in flight can pick it off
+  interceptBase: 0.14,
+  interceptSlope: 0.005, // per point of Perimeter D over the passer's Passing
+  // screens (Phase 7): a defender who runs into a screener is held up
+  screenRange: 0.85,
+  screenTime: 0.7, // seconds held up
+  screenSlow: 0.3, // speed share while held up
+  menuSlow: 0.08,
+  sidePlays: 6, // seconds the one-character mode's side play list shows at the start of a possession // game speed while the play / scheme menu is open
+  // the full game (Phase 8): 4 × 1:30 running clock, 1:00 overtimes (SIM.quarterSec / SIM.overtimeSec)
+  periodBreak: 2.5, // seconds between periods
+  drain: 0.11, // energy (0–100) lost per second on court, at Stamina 50; ×1.5 at Stamina 0, ×0.5 at 99
+  sprintDrain: 2.5, // × while sprinting (turbo)
+  recover: 0.6, // energy back per second on the bench
+  tiredSpeed: 0.85, // top speed share at zero energy (ratings use SIM.tiredFloor)
+  // SIM THE REST plays at the live game's pace: about 46 possessions in a live game (npm run balance:live) against
+  // the sim's ~160, so the score stays on the same scale after the hand-over
+  simPace: 0.29,
+  // ON FIRE (Phase 9, PLAN.md §3): this many straight makes by one Pokémon, until the other team scores
+  fireAfter: 3,
+  fireWindow: 1.5, // × the green zone while on fire
   // moving
   speedMin: 4.2, // m/s at Speed 0
   speedMax: 7.2, // m/s at Speed 99
@@ -152,6 +195,14 @@ export const LIVE = {
   meterTime: 0.75, // seconds to fill the meter to the top: the perfect release
   meterOver: 1.3, // held past this, the shot goes up late by itself
   airballBelow: 2, // let go more than this many green-zone widths under the line: too weak, it falls short
+  // long range (half and full court): past longFrom metres (× court size) the make chance falls off exponentially,
+  // over a distance set by Shooting + Strength on a steep curve: weak players can't, elite ones sometimes can
+  longFrom: 8.5,
+  longFallMin: 1, // metres the chance takes to fall to about a third, for the weakest
+  longFallMax: 7, // ... for the best
+  longPower: 3, // how steep the curve from weakest to best is (higher: only the very best get far)
+  doubleSteer: 0.7, // the double jump turns you toward the stick, at least this × top speed
+  doubleJump: 0.75, // Flying and Dragon types: a second jump in the air, this strong (× their first)
   windowMin: 0.07, // half-width of the green zone at rating 0 (share of the meter)
   windowMax: 0.17, // ... at rating 99
   perfectShare: 0.35, // the middle of the green zone that counts as PERFECT
@@ -185,6 +236,10 @@ export const LIVE = {
   crossTime: 0.3,
   crossCool: 1.4,
   crossBoost: 1.5,
+  stepBackBoost: 0.8, // × the crossover burst for a step-back (crossover while pushing away from the hoop)
+  sprintOnL: 0, // TEST (dev menu): 1 = L is sprint (hold) and a double tap of L is the crossover / steal
+  doubleTap: 0.3, // seconds: two L presses this close are a double tap
+  sprintTap: 0.2, // seconds: tap sprint this briefly with the ball for a crossover
   ankles: 0.4, // seconds a beaten defender stumbles
   anklesChance: 0.35, // plus 0.005 per point of Handles over Perimeter D
   // loose balls
@@ -200,11 +255,12 @@ export const LIVE_AI: Record<(typeof DIFFICULTIES)[number]["name"], {
   steal: number; // steal tries per second when in range
   block: number; // chance it tries to block a shot
   pullUp: number; // open jump shots per second
+  pass: number; // passes looked for per second with the ball (team games)
 }> = {
-  ROOKIE: { react: 0.45, aim: 0.16, steal: 0.5, block: 0.35, pullUp: 0.5 },
-  PRO: { react: 0.3, aim: 0.11, steal: 0.8, block: 0.55, pullUp: 0.7 },
-  "ALL-STAR": { react: 0.2, aim: 0.07, steal: 1.1, block: 0.75, pullUp: 0.9 },
-  CHAMPION: { react: 0.12, aim: 0.04, steal: 1.4, block: 0.9, pullUp: 1.1 },
+  ROOKIE: { react: 0.45, aim: 0.16, steal: 0.5, block: 0.35, pullUp: 0.5, pass: 0.6 },
+  PRO: { react: 0.3, aim: 0.11, steal: 0.8, block: 0.55, pullUp: 0.7, pass: 0.8 },
+  "ALL-STAR": { react: 0.2, aim: 0.07, steal: 1.1, block: 0.75, pullUp: 0.9, pass: 1.0 },
+  CHAMPION: { react: 0.12, aim: 0.04, steal: 1.4, block: 0.9, pullUp: 1.1, pass: 1.2 },
 };
 
 export const OVR_MIN = 40;

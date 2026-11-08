@@ -36,6 +36,7 @@ import { CapMeter, ColorPick, downloadCard, shareUrl } from "../components/TeamC
 import { useRated } from "../data.ts";
 import { backBlip, selectBlip } from "../sound.ts";
 import { inkOn, PALETTE } from "../theme/palette.ts";
+import { Arrow } from "../components/Arrow.tsx";
 
 const PAGE = 50;
 type Panel = null | "teams" | "share";
@@ -71,7 +72,7 @@ function SlotTile({ slot, p, boost, selected, color, onPick, onClear, onStats }:
           ) : (
             <span className="mb-[24px] flex flex-col items-center gap-1">
               <span className="font-head text-[24px] text-slate">+</span>
-              {selected && <span className="blink text-[20px] text-gold">PICK ▶</span>}
+              {selected && <span className="blink text-[20px] text-gold">PICK <Arrow /></span>}
             </span>
           )}
         </span>
@@ -216,7 +217,7 @@ export function Builder() {
           FREE BUILD
         </h1>
         <button className="px-btn" onClick={() => navigate("/", { state: { menu: true } })}>
-          ◀ BACK<span className="hidden sm:inline"> (ESC)</span>
+          <Arrow left /> BACK<span className="hidden sm:inline"> (ESC)</span>
         </button>
       </div>
 

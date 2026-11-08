@@ -31,6 +31,7 @@ import { CapMeter, ColorPick, downloadCard, shareUrl } from "../components/TeamC
 import { useRated } from "../data.ts";
 import { backBlip, blip, moveBlip, selectBlip } from "../sound.ts";
 import { inkOn, PALETTE, type PaletteName } from "../theme/palette.ts";
+import { Arrow } from "../components/Arrow.tsx";
 
 /** Each tier's frame colour, like card rarities. */
 const TIER_COLOR: Record<Tier, PaletteName> = { STAR: "gold", STARTER: "sky", ROLE: "green", SLEEPER: "lavender" };
@@ -247,7 +248,7 @@ export function DraftPage() {
 
   const drafting = loaded && !!run && !isOver(run.draft);
 
-  /** Throw the draft away and go home: pressing DRAFT next time starts fresh. */
+  /** Throw the draft away and go back to the draft's start screen, ready for a fresh one. */
   const quit = () => {
     backBlip();
     clearRun(); // now, not in the save effect: the page is gone before that would run
@@ -255,7 +256,6 @@ export function DraftPage() {
     setSelected(null);
     setSpot(null);
     setQuitting(false);
-    navigate("/", { state: { menu: true } });
   };
 
   const doReroll = () => {
@@ -295,7 +295,7 @@ export function DraftPage() {
       </h1>
       {!drafting ? (
         <button className="px-btn" onClick={() => navigate("/", { state: { menu: true } })}>
-          ◀ BACK<span className="hidden sm:inline"> (ESC)</span>
+          <Arrow left /> BACK<span className="hidden sm:inline"> (ESC)</span>
         </button>
       ) : quitting ? (
         <span className="flex flex-wrap justify-end gap-2" role="alert">
@@ -349,7 +349,7 @@ export function DraftPage() {
                 })}
               </div>
               <div className="ml-auto flex flex-wrap gap-2">
-                <button className="px-btn !bg-gold !text-black" onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}>SIM A GAME ▶</button>
+                <button className="px-btn !bg-gold !text-black" onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}>SIM A GAME <Arrow /></button>
                 <button className="px-btn" onClick={() => (selectBlip(), setShowResults(true))}>VIEW RESULTS</button>
               </div>
             </section>
@@ -363,7 +363,7 @@ export function DraftPage() {
           >
             <span className="font-head text-[24px] text-gold">DAILY DRAFT</span>
             <span className="text-[24px] leading-[1.2] text-white">Today's offers ({dateLabel(today)}), the same for everyone. Classic pool. Compare grades with friends.</span>
-            <span className="mt-2 self-start border-2 border-black bg-gold px-3 py-1 text-[24px] text-black">START ▶</span>
+            <span className="mt-2 self-start border-2 border-black bg-gold px-3 py-1 text-[24px] text-black">START <Arrow /></span>
           </button>
           <div className="flex flex-col gap-2 border-4 border-sky bg-night p-4" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
             <span className="font-head text-[24px] text-sky">QUICK DRAFT</span>
@@ -374,7 +374,7 @@ export function DraftPage() {
               ))}
             </span>
             <button className="offer mt-2 cursor-pointer self-start border-2 border-black bg-sky px-3 py-1 text-[24px] text-black" onClick={() => begin(false)}>
-              START ▶
+              START <Arrow />
             </button>
           </div>
         </div>
@@ -460,7 +460,7 @@ export function DraftPage() {
             style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}
             onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}
           >
-            SIM A GAME ▶
+            SIM A GAME <Arrow />
           </button>
         </section>
 
