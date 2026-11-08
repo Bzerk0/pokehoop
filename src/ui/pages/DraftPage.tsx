@@ -32,6 +32,7 @@ import { useRated } from "../data.ts";
 import { backBlip, blip, moveBlip, selectBlip } from "../sound.ts";
 import { inkOn, PALETTE, type PaletteName } from "../theme/palette.ts";
 import { Arrow } from "../components/Arrow.tsx";
+import { GAME_NAME } from "../name.ts";
 
 /** Each tier's frame colour, like card rarities. */
 const TIER_COLOR: Record<Tier, PaletteName> = { STAR: "gold", STARTER: "sky", ROLE: "green", SLEEPER: "lavender" };
@@ -410,7 +411,7 @@ export function DraftPage() {
     };
     const onCopy = async () => {
       const text = draft.daily
-        ? `STARTING 5 DAILY DRAFT ${dateLabel(draft.seed)}: GRADE ${grade}, OVR ${teamOvr(lineup, dex)} ${shareUrl(lineup)}`
+        ? `${GAME_NAME} DAILY DRAFT ${dateLabel(draft.seed)}: GRADE ${grade}, OVR ${teamOvr(lineup, dex)} ${shareUrl(lineup)}`
         : shareUrl(lineup);
       try {
         await navigator.clipboard.writeText(text);

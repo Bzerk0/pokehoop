@@ -159,4 +159,23 @@ export const DEV_GROUPS: { title: string; items: [DevKey, string][] }[] = [
       ["menuSlow", "game speed while the Q menu is open"],
     ],
   },
+  {
+    title: "REPLAYS",
+    items: [
+      ["replays", "1 = instant replays on, 0 = off"],
+      ["liveCine", "1 = live cuts: dunks, oops, blocks, corner 3s"],
+      ["cineGap", "game seconds between live cuts"],
+      ["replayMin", "hype a play needs for an instant replay"],
+      ["replayGap", "game seconds between instant replays"],
+      ["replaySlow", "slow-motion speed at the big moment"],
+      ["replaySlowSpan", "seconds of full slow-mo either side"],
+      ["topPlays", "plays in the end-of-game reel"],
+      ["replayHype.dunk", "hype: slam dunk"],
+      ["replayHype.stepback", "hype: step-back three"],
+      ["replayHype.ankles", "hype: ankle breaker"],
+      ["replayHype.block", "hype: block"],
+      ["replayHype.chase", "hype: chase-down block"],
+      ["replayHype.buzzer", "hype added for a buzzer-beater"],
+    ],
+  },
 ];

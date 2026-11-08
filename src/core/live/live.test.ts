@@ -5,7 +5,7 @@ import { rateAll } from "../ratings.ts";
 import type { RatedPokemon } from "../types.ts";
 import { makeAi, makeCoach } from "./ai.ts";
 import {
-  blockChance, boxes, callPlay, callScheme, COURT, dist, energyOf, giveBall, hoopOf, keyPlayer, lineupGame, longShotFactor, makeChance, meterWindow, newGame, quickChance,
+  blockChance, boxes, callPlay, passBall, callScheme, COURT, dist, energyOf, giveBall, hoopOf, keyPlayer, lineupGame, longShotFactor, makeChance, meterWindow, newGame, quickChance,
   NO_INPUT, shotWindow, spotOf, step, timingOf, type Game, type Input,
 } from "./game.ts";
 import { canSimRest, simTheRest } from "./handover.ts";
@@ -737,6 +737,48 @@ describe("long shots and double jumps", () => {
     for (let i = 0; i < 180 && g.ball.holder !== me.i; i++) step(g, g.players.map(() => NO_INPUT), DT);
     expect(g.ball.holder).toBe(me.i);
     expect(g.control).toBe(2);
+  });
+
+  it("a dunk rises to an apex above the rim, then the ball is hammered down, faster and faster", () => {
+    const g = newGame([named("lucario")], [named("snorlax")], 3);
+    const me = g.players[0], hoop = hoopOf(0);
+    g.players[1].x = 1; // out of the way
+    me.x = hoop.x; me.y = hoop.y - 1.2;
+    giveBall(g, 0);
+    step(g, [hold({ turbo: true, shoot: true }), NO_INPUT], DT);
+    expect(me.act).toBe("dunk");
+    while (g.ball.flight?.kind !== "shot") step(g, [NO_INPUT, NO_INPUT], DT);
+    expect(g.ball.z).toBeGreaterThan(COURT.rimZ + 0.3); // up above the rim
+    expect(me.vz).toBeLessThan(0); // the dunker comes down with it
+    const f = g.ball.flight!, z = (s: number) => f.z0 + (f.z1 - f.z0) * s + (f.peak - (f.z0 + f.z1) / 2) * 4 * s * (1 - s);
+    expect(z(0.25) - z(0.5)).toBeLessThan(z(0.75) - z(1)); // speeding up on the way down
+    expect(z(0.01)).toBeLessThanOrEqual(f.z0); // never rises first
+  });
+
+  it("a pass to a finisher near the rim is an alley-oop: lobbed, caught at the top of the leap, slammed", () => {
+    const g = newGame([named("lucario"), named("garchomp")], [named("snorlax"), named("metagross")], 5);
+    const hoop = hoopOf(0), [pg, big] = g.players;
+    for (const q of g.players.filter((q) => q.side === 1)) (q.x = 1), (q.y = 2); // defence asleep at the other end
+    pg.x = hoop.x; pg.y = hoop.y - 8;
+    big.x = hoop.x + 1.5; big.y = hoop.y - 2;
+    giveBall(g, pg.i);
+    passBall(g, pg, big);
+    expect(g.ball.flight?.oop).toBe(true);
+    expect(g.events.some((e) => e.text === "ALLEY-OOP!" && e.who === big.i)).toBe(true);
+    const seen: string[] = [];
+    for (let i = 0; i < 180 && !seen.includes("make") && !seen.includes("miss"); i++) {
+      step(g, g.players.map(() => NO_INPUT), DT);
+      if (big.act === "dunk") seen.push("leap");
+      seen.push(...g.events.map((e) => (e.kind === "release" ? e.text : e.kind)));
+    }
+    expect(seen).toContain("leap");
+    expect(seen).toContain("DUNK"); // slammed from the air, not a jumper
+    // and a pass to someone out at the arc is just a pass
+    const g2 = newGame([named("lucario"), named("garchomp")], [named("snorlax"), named("metagross")], 5);
+    g2.players[1].x = hoop.x; g2.players[1].y = hoop.y - 7;
+    giveBall(g2, 0);
+    passBall(g2, g2.players[0], g2.players[1]);
+    expect(g2.ball.flight?.oop).toBeFalsy();
   });
 
   it("the double jump turns you the way the stick points", () => {

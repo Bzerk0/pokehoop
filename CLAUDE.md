@@ -8,6 +8,8 @@
 - Run npm test and npm run build before saying a phase is done.
 
 ## Where things are
+- The game is called POKéHOOP: `src/ui/name.ts` (`GAME_NAME`) for the cabinet, team card and shares; the title logo
+  (Title.tsx) and index.html spell it out themselves. "STARTING 5" left in the UI is the basketball term, not the name.
 - `npm run data` rebuilds `public/data/pokemon.json` and `public/sprites/` from PokéAPI (cached in `.cache/`, safe to re-run).
 - Palette: `src/ui/theme/palette.ts` is the source; `src/index.css` `@theme` mirrors it (a test checks they match).
 - Ratings: `src/core/ratings.ts` (formulas), `src/core/ratingConfig.ts` (numbers), `src/core/overrides.json` (hand fixes).
@@ -38,6 +40,34 @@
   (action → key code, saved in localStorage; arrows, Space and right Shift always work too; Enter, Esc and 1–5 can't be
   rebound); the pause menu's CONTROLS screen rebinds; the HUD, intro and tutorial text show your own keys ({action}
   placeholders in tutorial.ts).
+- Replays (`src/game/replay.ts`, no Three.js): a `Recorder` keeps the last 6 s (a snapshot per step), a `ClipSpotter`
+  turns events into clips (dunk, step-back three, ankles, block, chase-down, buzzer-beater; events carry `who`/`vs`),
+  `cameraFor` scripts the angles per kind (cuts numbered), `replaySpeed` the slow-mo round `keys`. LiveView films each
+  step, replays the biggest clip at the next stoppage (LIVE.replay*: on/off, min hype, gap, slow-mo; dev menu REPLAYS),
+  pausing the game and painting snapshots onto `g` (restored after), and plays the top `topPlays` as a reel before
+  the results. Replays show your end's stands and a solid near hoop (`nearOnly`/`nearFade`), fade players in front of
+  the star, and add afterimages, squash/stretch, shockwave, dust and a rim bend. Dev builds expose `window.__live`.
+  Live cinematics (`LIVE.liveCine`): when a good finisher (Finishing 70+) takes off for a dunk, LiveView cuts live to
+  the dunk camera script (`cine`, a framesless Clip on the game clock), slows the game itself round the slam
+  (`replaySpeed`), fires the slam effects on the make, and cuts back on landing; that dunk isn't instant-replayed.
+  A block during it holds the shot and shows a caption (BIG BLOCK! / BLOCKED BY X!). Dunks rise to `LIVE.dunkApex`
+  over the rim, then the ball is hammered down in `dunkSlamTime` (a pure ease-in arc) and the dunker drops at `dunkSlam`.
+  Alley-oops (game.ts `passBall`): a pass to a Finishing-`oopFinishing`+ teammate within `oopRange` of the rim is a
+  lob (`flight.oop`) to just above the rim; the receiver takes off (`startDunk`) so the top of the leap meets it, catches
+  it there (`dunkStep` hangs until it has the ball) and slams. Live cuts (`watchForCine`, gap `LIVE.cineGap`): oop
+  lobs, dunk take-offs, blocks (caption via `bigBlock`) and corner threes (`cornerThree`). Flashy bits: the ball burns
+  with a flame trail on slams and oop lobs (`drawBallFire`); blocks throw a shockwave, steals a dust puff, made threes
+  a ring off the net (in normal play too).
+  Countdown beeps: LiveView `countdown()` (last 5 s of the shot clock; higher for the quarter clock).
+- Title screen (test): attract mode. `Title.tsx` runs a LiveView with `attract: true` (CPU-vs-CPU 5v5 fast-forwarded
+  off screen, each spotted clip shown through the replay cameras; no HUD, sound or keys) under the logo; INSERT COIN
+  (Enter/Space/click: the first press zooms in from the cabinet, the next drops the coin) opens the menu: big PLAY and DRAFT buttons, small ABOUT and POKéDEX under them (arrows move, Esc steps back), a fan-game notice along the bottom; Free Build is reached from the draft and Play pages. The previous title (arena + flaming-ball PRESS START) is
+  `OldTitle.tsx`, unrouted: route "/" to it in App.tsx to switch back.
+- Credits: anything someone else made goes in `src/ui/credits.ts` (for the Phase 10 About page). Sound files live in
+  `public/sfx/` (the coin: Alex_Jauk on Pixabay, bitcrushed with ffmpeg `acrusher`); everything else is made in code.
+- Title screen performance: big static pixel art is painted once into canvases (`RectCanvas.tsx`), never SVG rects,
+  and every animated title piece (`.t-anim`) is its own compositor layer (will-change). Keep it that way: SVG art
+  re-rasterises on every animation step, worst inside the 3D cabinet.
 - Gameplay aids (LIVE in ratingConfig.ts): quick shot (K tapped under `quickTap`: no meter, no air ball, accuracy
   falls off with distance, `quickChance`); your block jump drifts toward a nearby shot (`blockNudge`, the player you
   steer only: on the CPU it swatted too many of your shots); chase-down blocks (sprinting in from behind:

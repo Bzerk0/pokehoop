@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { makeAi } from "../core/live/ai.ts";
-import { callPlay, dist, hoopOf, lineupGame, NO_INPUT, step, type Input } from "../core/live/game.ts";
+import { callPlay, dist, giveBall, hoopOf, lineupGame, NO_INPUT, step, type Input } from "../core/live/game.ts";
 import { dexOf } from "../core/lineup.ts";
 import { LIVE, LIVE_AI } from "../core/ratingConfig.ts";
 import { rateAll } from "../core/ratings.ts";
@@ -17,6 +17,21 @@ const away = { name: "CPU", ids: ids(["alakazam", "scizor", "infernape", "tyrani
 const DT = 1 / 60;
 
 describe("HOW TO PLAY", () => {
+  it("never gets stuck when the standing-still CPU ends up with the ball (a make or their rebound)", () => {
+    const g = lineupGame(home, away, dex, 3, 1, true);
+    const tu = new Tutorial(g);
+    while (tu.step?.title !== "SHOOT") (tu as unknown as { i: number }).i++;
+    tu.step.setup?.(g);
+    giveBall(g, g.players.find((p) => p.side === 1)!.i); // they got it
+    tu.update(DT, []);
+    expect(g.players[g.ball.holder!].side).toBe(0); // yours again
+    g.dead = 0.5; // or: you scored, and it's their inbound
+    g.next = 1;
+    tu.update(DT, []);
+    expect(g.dead).toBe(0);
+    expect(g.players[g.ball.holder!].side).toBe(0);
+  });
+
   it("a new player who follows the steps finishes the lesson in under two minutes", () => {
     const g = lineupGame(home, away, dex, 3, 1, true);
     const tu = new Tutorial(g);

@@ -7,7 +7,7 @@ import * as THREE from "three";
 import { makeAi, makeCoach, type AiLevel } from "../core/live/ai.ts";
 import {
   callPlay, callScheme, COURT, energyOf, facedTeammate, handlerOf, handZ, lineupGame, liveResult, meterWindow, NO_INPUT, reachOf, step,
-  subIn, type Game, type GameEvent, type Input,
+  subIn, type Game, type GameEvent, type Input, type Player,
 } from "../core/live/game.ts";
 import { PLAY, PLAYS, SCHEME_ABOUT, SCHEMES, type PlayName, type SchemeName } from "../core/live/plays.ts";
 import { LIVE } from "../core/ratingConfig.ts";
@@ -16,11 +16,12 @@ import type { Lineup } from "../core/lineup.ts";
 import type { GameResult } from "../core/sim/sim.ts";
 import { clock as clockText } from "../core/stats.ts";
 import type { RatedPokemon } from "../core/types.ts";
-import { blip, fanfare, womp } from "../ui/sound.ts";
+import { blip, boom, fanfare, swoosh, womp } from "../ui/sound.ts";
+import { cameraFor, ClipSpotter, frameAt, Recorder, replaySpeed, snap, type Clip, type Snap } from "./replay.ts";
 import { Music } from "./music.ts";
 import { STEPS, Tutorial } from "./tutorial.ts";
 import { ACTIONS, codesFor, keyName, loadKeys, type Action, type KeyMap } from "./keys.ts";
-import { PALETTE, typeColor, type PaletteName } from "../ui/theme/palette.ts";
+import { inkOn, PALETTE, typeColor, type PaletteName } from "../ui/theme/palette.ts";
 
 export type LiveSetup = {
   /** Your full lineup and theirs (8 each): who starts depends on `size`, the rest are the bench. */
@@ -42,6 +43,9 @@ export type LiveSetup = {
   crowd?: number;
   /** HOW TO PLAY: a 3v3 practice game run as a step-by-step lesson (tutorial.ts). */
   tutorial?: boolean;
+  /** The title screen's background: a silent CPU-vs-CPU game, fast-forwarded off screen, showing only its big plays
+   *  through the replay cameras, one after another. No HUD, no sound, no keys. */
+  attract?: boolean;
 };
 
 /** The usual crowd level; pass `crowd` in the setup (or call setCrowd) for a different one. */
@@ -144,6 +148,41 @@ export class LiveView {
   private holdFromStart = false; // K/Space still held from the press that tipped off
   private staminaUntil = 0; // show the stamina bar until then (ms)
   private crowd: number;
+  // replays (replay.ts): the recording, the big-play spotter, clips still being filmed, one waiting to be shown, the
+  // game's best plays for the reel, and the replay playing now
+  private rec = new Recorder(6);
+  private spotter = new ClipSpotter();
+  private pendingClips: Clip[] = [];
+  private waitingClip: Clip | null = null;
+  private topClips: Clip[] = [];
+  private lastReplayAt = -Infinity;
+  private replay: { clip: Clip; t: number; hold: number; cut: number; hit: number; label: string; saved: Snap; reel: boolean; began: number } | null = null;
+  private reel: Clip[] = [];
+  private gone = false; // destroyed: late timers do nothing
+  private rpos = new THREE.Vector3();
+  private rlook = new THREE.Vector3();
+  private replayFlashUntil = 0;
+  // a live cinematic: the dunk camera cutting in while the dunk really happens (the game itself goes slow-mo)
+  private cine: { clip: Clip; cut: number } | null = null;
+  private cineKey = -Infinity; // when the last live-filmed slam lands (so it isn't replayed again)
+  private lastActs: string[] = [];
+  private cineCaption: { text: string; color: PaletteName; at: number } | null = null; // BIG BLOCK! over a live cinematic
+  private ticks = { shot: 99, clock: 99 }; // the last second each clock ticked on (the countdown beeps)
+  private cineBlocked = false; // the live slam got stuffed
+  private lastCineAt = -Infinity; // game time the last live cut ended (LIVE.cineGap)
+  private ballFire!: THREE.Sprite; // the ball on fire for a slam or an alley-oop
+  private trail: { sprite: THREE.Sprite; x: number; y: number; z: number; t: number }[] = []; // its fire trail
+  private nearOnly: THREE.Object3D[] = []; // your end's pole and stands: only replay angles ever see them
+  private nearFade: { m: THREE.MeshBasicMaterial; o: number; on: number }[] = []; // your hoop: see-through in play, solid in replays
+  private rims: THREE.Mesh[] = [];
+  private nets: THREE.Mesh[] = [];
+  private bend = { until: 0, end: 1 }; // a rim bending after a slam
+  private ghosts: THREE.Sprite[] = []; // afterimages trailing the star of a replay
+  private impact!: THREE.Mesh; // a shockwave ring at the moment of impact
+  private impactAt: { x: number; y: number; z: number; t: number } | null = null;
+  private dust: THREE.Sprite[] = [];
+  private dustAt: { x: number; y: number; t: number } | null = null;
+  private baseScale: [number, number][] = []; // each sprite's size (replays squash and stretch the star)
 
   constructor(private host: HTMLElement, private d: LiveSetup) {
     W = COURT.w;
@@ -169,10 +208,14 @@ export class LiveView {
 
     this.reloadKeys();
     this.build();
-    window.addEventListener("keydown", this.onDown);
-    window.addEventListener("keyup", this.onUp);
-    window.addEventListener("blur", this.onBlur);
-    document.addEventListener("visibilitychange", this.onVisibility);
+    if (import.meta.env.DEV) (window as unknown as { __live?: LiveView }).__live = this; // dev only: poke at it from the console
+    if (d.attract) this.started = true; // no intro, no music, no keys: it just plays
+    else {
+      window.addEventListener("keydown", this.onDown);
+      window.addEventListener("keyup", this.onUp);
+      window.addEventListener("blur", this.onBlur);
+      document.addEventListener("visibilitychange", this.onVisibility);
+    }
     this.raf = requestAnimationFrame(this.frame);
   }
 
@@ -197,6 +240,8 @@ export class LiveView {
   }
   /** Hand the rest of the game to the sim: the final result (live part included). */
   simRest(): GameResult {
+    if (this.replay) this.applySnap(this.replay.saved); // mid-replay: the real positions back first
+    this.replay = null;
     this.ended = true;
     this.music.stop();
     return simTheRest(this.g, this.d.home, this.d.away, this.d.dex, (this.d.seed * 31 + 7) >>> 0);
@@ -221,6 +266,7 @@ export class LiveView {
     if (this.started && !this.ended) this.music.start();
   }
   destroy() {
+    this.gone = true;
     cancelAnimationFrame(this.raf);
     this.music.stop();
     document.removeEventListener("visibilitychange", this.onVisibility);
@@ -371,6 +417,23 @@ export class LiveView {
         s.add(m);
       }
     this.makeFans(stands, standAt, shade);
+    // a stand behind your own end too: the play camera sits there, so it only shows in replays
+    for (let i = 0; i < BANDS; i++) {
+      const t = this.keep(crowdTex.clone());
+      t.repeat.set((W + 20) / 4, DEPTH_M / BANDS / 4);
+      t.needsUpdate = true;
+      const m = new THREE.Mesh(
+        this.keep(new THREE.PlaneGeometry(W + 20, DEPTH_M / BANDS)),
+        this.keep(new THREE.MeshBasicMaterial({ map: t, color: new THREE.Color().setScalar(shade((i + 0.5) / BANDS)) })),
+      );
+      m.rotation.order = "YXZ";
+      m.rotation.y = Math.PI;
+      m.rotation.x = -Math.PI / 2 + SLOPE;
+      m.position.copy(standAt(0, 1, L / 2 + M, 0, (i + 0.5) / BANDS));
+      m.visible = false;
+      this.nearOnly.push(m);
+      s.add(m);
+    }
 
     this.hoop(1);
     this.hoop(0);
@@ -421,6 +484,35 @@ export class LiveView {
     this.burst.rotation.x = -Math.PI / 2;
     this.burst.visible = false;
     s.add(this.burst);
+    // replay props: afterimages, an impact shockwave, dust puffs
+    for (let k = 0; k < 2; k++) {
+      const gh = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ transparent: true, opacity: 0.3 - k * 0.14, depthWrite: false })));
+      gh.center.set(0.5, 0);
+      gh.visible = false;
+      this.ghosts.push(gh);
+      s.add(gh);
+    }
+    this.ballFire = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ map: flame, transparent: true, depthWrite: false, color: col("orange") })));
+    this.ballFire.center.set(0.5, 0.25);
+    this.ballFire.visible = false;
+    s.add(this.ballFire);
+    for (let k = 0; k < 8; k++) {
+      const sp = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ map: flame, transparent: true, depthWrite: false, color: col(k % 2 ? "amber" : "red") })));
+      sp.visible = false;
+      this.trail.push({ sprite: sp, x: 0, y: 0, z: 0, t: -1e9 });
+      s.add(sp);
+    }
+    this.impact = new THREE.Mesh(this.keep(new THREE.RingGeometry(0.35, 0.55, 20)), this.keep(basic("white", { transparent: true, depthWrite: false, side: THREE.DoubleSide })));
+    this.impact.rotation.x = -Math.PI / 2;
+    this.impact.visible = false;
+    s.add(this.impact);
+    const puff = this.keep(pixelTexture(paint(4, 4, (px) => (px(1, 0, "cream", 2, 4), px(0, 1, "cream", 4, 2)))));
+    for (let k = 0; k < 8; k++) {
+      const d = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ map: puff, transparent: true, depthWrite: false, color: col("tan") })));
+      d.visible = false;
+      this.dust.push(d);
+      s.add(d);
+    }
 
     const ballTex = this.keep(pixelTexture(paint(7, 7, (px) => {
       px(2, 0, "orange", 3, 1);
@@ -455,6 +547,7 @@ export class LiveView {
     (sprite.material as THREE.SpriteMaterial).map = tex;
     (sprite.material as THREE.SpriteMaterial).needsUpdate = true;
     sprite.scale.set((p.spriteW * k) / SPRITE_PX, (p.spriteH * k) / SPRITE_PX, 1);
+    this.baseScale[i] = [sprite.scale.x, sprite.scale.y];
     this.dressed[i] = p.id;
   }
 
@@ -587,24 +680,31 @@ export class LiveView {
     const steel = this.keep(basic("steel")), white = this.keep(basic("white", fade)), red = this.keep(basic("red", fade));
     const glass = this.keep(basic("ice", { transparent: true, opacity: end === 0 ? 0.1 : 0.25, depthWrite: false }));
     const boardY = hy + out * 0.375;
-    if (end === 1) {
-      // your own hoop's pole would stand between the camera and the play, so only the far one has one
-      box(0.2, 3.6, 0.2, steel, 0, hy + out * 2.6, 1.8); // pole
-      box(0.5, 0.25, 0.5, this.keep(basic("black")), 0, hy + out * 2.6, 0.12); // pad at the base
-      box(0.1, 0.1, 2.2, steel, 0, hy + out * 1.5, 3.45); // arm out to the board
-    }
+    // your own hoop's pole would stand between the camera and the play: it only shows in replays
+    const support = [
+      box(0.2, 3.6, 0.2, steel, 0, hy + out * 2.6, 1.8), // pole
+      box(0.5, 0.25, 0.5, this.keep(basic("black")), 0, hy + out * 2.6, 0.12), // pad at the base
+      box(0.1, 0.1, 2.2, steel, 0, hy + out * 1.5, 3.45), // arm out to the board
+    ];
+    if (end === 0) for (const m of support) (m.visible = false), this.nearOnly.push(m);
     box(1.83, 1.07, 0.04, glass, 0, boardY, 3.435); // glass board
     for (const [w, h, x, z] of [[1.83, 0.05, 0, 3.95], [1.83, 0.05, 0, 2.92], [0.05, 1.07, -0.9, 3.435], [0.05, 1.07, 0.9, 3.435]] as const)
       box(w, h, 0.05, white, x, boardY, z);
     for (const [w, h, x, z] of [[0.59, 0.04, 0, 3.45], [0.04, 0.45, -0.28, 3.25], [0.04, 0.45, 0.28, 3.25]] as const)
       box(w, h, 0.05, red, x, boardY - out * 0.01, z); // the shooter's square
-    const rim = new THREE.Mesh(this.keep(new THREE.TorusGeometry(0.23, 0.025, 4, 14)), this.keep(basic("orange", fade)));
+    const rimMat = this.keep(basic("orange", fade));
+    if (end === 0) this.nearFade.push({ m: white, o: 0.3, on: 1 }, { m: red, o: 0.3, on: 1 }, { m: rimMat, o: 0.3, on: 1 }, { m: glass, o: 0.1, on: 0.25 });
+    const rim = new THREE.Mesh(this.keep(new THREE.TorusGeometry(0.23, 0.025, 4, 14)), rimMat);
     rim.rotation.x = Math.PI / 2;
     rim.position.copy(at(W / 2, hy, COURT.rimZ));
     this.scene.add(rim);
-    const net = new THREE.Mesh(this.keep(new THREE.CylinderGeometry(0.23, 0.15, 0.42, 8, 2, true)), this.keep(basic("white", { wireframe: true, ...fade })));
+    const netMat = this.keep(basic("white", { wireframe: true, ...fade }));
+    if (end === 0) this.nearFade.push({ m: netMat, o: 0.3, on: 1 });
+    const net = new THREE.Mesh(this.keep(new THREE.CylinderGeometry(0.23, 0.15, 0.42, 8, 2, true)), netMat);
     net.position.copy(at(W / 2, hy, COURT.rimZ - 0.21));
     this.scene.add(net);
+    this.rims[end] = rim;
+    this.nets[end] = net;
 
     // a red glow round the board, lit when the shot clock runs out on this end
     const glow = this.keep(basic("red", { transparent: true, opacity: 0, depthWrite: false }));
@@ -654,6 +754,21 @@ export class LiveView {
     this.last = now;
     if (this.paused) return;
     this.vt += dt * (this.menu ? LIVE.menuSlow : 1);
+    if (this.d.attract) {
+      if (this.replay) this.runReplay(dt, now);
+      else this.attractSearch();
+      if (this.replay) this.draw(dt, now); // between clips the last picture stays up
+      return;
+    }
+    if (this.replay) {
+      // a replay: the game waits while the clip plays
+      this.runReplay(dt, now);
+      this.tapped.clear();
+      this.sprintTapped = false;
+      this.doubleTapped = false;
+      this.draw(dt, now);
+      return;
+    }
 
     if (!this.started) {
       if (this.tapped.has("Enter") || this.tapped.has("Space")) {
@@ -679,7 +794,7 @@ export class LiveView {
         passTo: digit != null && digit <= this.g.size ? digit - 1 : null,
         screen: false,
       };
-      this.acc += dt * (this.menu ? LIVE.menuSlow : 1); // the game slows while you pick from the menu
+      this.acc += dt * (this.menu ? LIVE.menuSlow : 1) * (this.cine ? replaySpeed(this.cine.clip, this.g.time) : 1); // slower in the menu, and at a live slam
       let first = true;
       const frameEvents: GameEvent[] = this.extraEvents.splice(0); // anything from between steps (a menu call)
       // in the tutorial the CPU stands still (and has no coach) except in the defence step
@@ -690,11 +805,22 @@ export class LiveView {
         const g = this.g;
         step(g, g.players.map((p) => (p.i === g.control ? yours : cpuIdle && p.side === 1 ? NO_INPUT : this.brains[p.i]?.(g, DT) ?? NO_INPUT)), DT);
         if (!this.tutor) this.coach(g); // after the step, so its calls land in this step's events
+        if (!this.tutor) {
+          // film it, and watch for big plays to replay
+          this.rec.push(g);
+          for (const e of g.events) {
+            const clip = this.spotter.spot(e, g);
+            if (clip) this.pendingClips.push(clip);
+          }
+        }
         first = false;
         for (const e of g.events) this.onEvent(e, now);
+        if (!this.tutor) this.watchForCine(now);
         frameEvents.push(...g.events);
         if (g.over) break;
       }
+      if (!this.tutor) this.checkClips();
+      this.countdown();
       if (steering.turbo < tankBefore) this.staminaUntil = now + 1000; // turbo in use: show the bar
       const lesson = this.tutor?.update(dt * (this.menu ? LIVE.menuSlow : 1), frameEvents);
       if (lesson === "next") {
@@ -713,7 +839,7 @@ export class LiveView {
         this.music.stop();
         const lost = this.g.winner === 1;
         setTimeout(() => (lost ? womp() : fanfare()), ENDING.react);
-        setTimeout(() => this.d.onOver([...this.g.score] as [number, number], this.g.timed ? liveResult(this.g) : null), ENDING.menu);
+        setTimeout(() => this.finishGame(), ENDING.menu); // the top plays reel, then the results
       }
     }
     if (this.tap("music")) {
@@ -802,6 +928,7 @@ export class LiveView {
       case "make":
         blip(e.text === "THREE!" ? 1568 : 1320, 110);
         pop(e.text);
+        if (e.text === "THREE!") this.impactAt = { x: W / 2, y: e.side === 0 ? L - COURT.hoopIn : COURT.hoopIn, z: COURT.rimZ, t: now }; // a ring off the net
         break;
       case "miss":
         blip(196, 110);
@@ -811,11 +938,15 @@ export class LiveView {
         blip(140, 180, 0.07);
         this.shake = 0.25;
         pop(e.text);
+        this.impactAt = { x: this.g.ball.x, y: this.g.ball.y, z: this.g.ball.z, t: now }; // a shockwave off the swat
         break;
-      case "steal":
+      case "steal": {
         blip(1046, 90);
         pop(e.text);
+        const thief = e.who != null ? this.g.players[e.who] : null;
+        if (thief) this.dustAt = { x: thief.x, y: thief.y, t: now }; // a puff where they ripped it
         break;
+      }
       case "ankles":
         blip(1175, 80);
         pop(e.text);
@@ -890,7 +1021,7 @@ export class LiveView {
     // the flash: a gold shockwave rings out from under the new player
     const flashLeft = this.flashUntil - now, flashOn = flashLeft > 0;
     const wave = flashOn ? 1 - flashLeft / SWITCH_FLASH : 1;
-    this.burst.visible = flashOn;
+    this.burst.visible = flashOn && !this.cinematic;
     if (flashOn) {
       this.burst.scale.setScalar(1 + wave * 5);
       (this.burst.material as THREE.MeshBasicMaterial).opacity = 1 - wave;
@@ -911,7 +1042,7 @@ export class LiveView {
       const moving = pl.z === 0 && Math.hypot(pl.vx, pl.vy) > 0.8;
       // the game-over moment: after a beat, the losers tip over onto their sides and the winners hop for joy
       let hop = moving && Math.floor(t * 8) % 2 ? 0.05 : 0;
-      const since = this.ended && g.over && !this.tutor ? now - this.endAt - ENDING.react : -1;
+      const since = this.ended && g.over && !this.tutor && !this.replay ? now - this.endAt - ENDING.react : -1;
       const mat = body.material as THREE.SpriteMaterial;
       mat.rotation = 0;
       let lift = 0;
@@ -923,11 +1054,15 @@ export class LiveView {
           lift = (body.scale.x / 2) * Math.abs(Math.sin(mat.rotation));
         }
       }
+      const [bsx, bsy] = this.baseScale[i] ?? [body.scale.x, body.scale.y];
+      body.scale.set(bsx, bsy, 1);
+      if (this.cinematic) lift += this.replayPose(i, pl, body, mat);
       // fallen players draw on a layer above the court, so nothing of them disappears into the floor
       const fallen = mat.rotation !== 0;
       mat.depthTest = !fallen;
       body.renderOrder = fallen ? 10 : 0;
       body.position.copy(at(pl.x, pl.y, pl.z + 0.01 + hop + lift));
+      this.fadeIfInTheWay(i, body, mat);
       const tint = (body.material as THREE.SpriteMaterial).color;
       if (i === this.whiteWho && now < this.whiteUntil) tint.setScalar(8); // way past white: a white silhouette
       else tint.copy(pl.act === "stumble" ? col("fog") : new THREE.Color(0xffffff));
@@ -936,6 +1071,7 @@ export class LiveView {
       if (pl.side === 0) this.teamRings[i].material = pl.i === passTarget ? this.ringMats!.target : this.ringMats!.mate;
       // the pass target's ring is bigger and pulses
       this.teamRings[i].scale.setScalar(pl.i === passTarget ? 1.35 + 0.15 * (Math.floor(now / 150) % 2) : 1);
+      this.teamRings[i].visible = !this.cinematic && g.size > 1 && pl.side === 0; // replays are clean pictures
       // ON FIRE: the flame sits just behind (further from the camera), flickering in pixel steps
       const aura = this.auras[i];
       aura.visible = pl.onFire;
@@ -949,10 +1085,11 @@ export class LiveView {
     const you = g.players[g.control];
     this.ring.position.copy(at(you.x, you.y, 0.03));
     this.ring.scale.setScalar(flashOn ? 1.6 : 1); // the gold ring pops too
+    this.ring.visible = !this.cinematic;
     this.burst.position.copy(at(you.x, you.y, 0.035));
     const theirBall = g.poss === 1 || g.players[g.ball.holder ?? 0]?.side === 1;
     const man = g.solo && theirBall ? g.players.find((q) => q.side === 1 && q.slot === you.slot) : undefined;
-    this.manRing.visible = !!man;
+    this.manRing.visible = !!man && !this.cinematic;
     if (man) this.manRing.position.copy(at(man.x, man.y, 0.03));
 
     // the ball: dribbled at the side, held up to shoot, or flying
@@ -967,13 +1104,438 @@ export class LiveView {
       }
     }
     this.ball.position.copy(at(bx, b.y, bz + 0.22));
+    this.drawBallFire(bx, b.y, bz + 0.22, now);
     this.ballShadow.position.copy(at(bx, b.y, 0.025));
 
+    this.drawReplayFx(now);
     this.animateFans(t, dt);
     this.drawHoopFx(now);
-    this.moveCamera(dt);
+    if (this.replay) this.cinemaCamera(dt, this.replay.clip, this.replay.t, frameAt(this.replay.clip.frames, this.replay.t), this.replay);
+    else if (this.cine) this.cinemaCamera(dt, this.cine.clip, this.g.time, snap(this.g), this.cine);
+    else this.moveCamera(dt);
     this.renderer.render(this.scene, this.camera);
-    this.drawHud(now);
+    if (this.d.attract) this.hud.clearRect(0, 0, VIEW_W, VIEW_H); // the title screen draws its own
+    else if (this.replay) this.drawReplayHud(now);
+    else if (this.cine) this.drawCineHud();
+    else this.drawHud(now);
+  }
+
+  // ── replays (replay.ts has the recording, the spotting and the camera scripts) ─────────────────────────────
+  /** Clips that have finished filming join the top plays; the biggest gets an instant replay at the next stoppage. */
+  private checkClips() {
+    const g = this.g;
+    for (const c of [...this.pendingClips]) {
+      if (g.time < c.end && !g.over) continue;
+      this.pendingClips.splice(this.pendingClips.indexOf(c), 1);
+      c.frames = this.rec.between(c.start, Math.min(c.end, g.time));
+      if (c.frames.length < 20) continue;
+      this.topClips.push(c);
+      this.topClips.sort((a, b) => b.hype - a.hype || b.start - a.start);
+      this.topClips.length = Math.min(this.topClips.length, 5);
+      const shownLive = Math.abs(c.keys[c.keys.length - 1] - this.cineKey) < 1; // already seen it live
+      if (LIVE.replays >= 1 && !shownLive && c.hype >= LIVE.replayMin && (!this.waitingClip || c.hype > this.waitingClip.hype)) this.waitingClip = c;
+    }
+    const w = this.waitingClip;
+    if (!w || g.over) return;
+    if (g.time - w.end > 8) return void (this.waitingClip = null); // too long ago now
+    // made baskets are at a stoppage already; live-ball plays (ankles, blocks) wait for the next one
+    const stoppage = g.dead > 0 || w.kind === "dunk" || w.kind === "stepback" || w.kind === "shot";
+    if (!stoppage || g.time - this.lastReplayAt < LIVE.replayGap) return;
+    this.waitingClip = null;
+    this.lastReplayAt = g.time;
+    this.startReplay(w, "REPLAY", false);
+  }
+
+  private startReplay(clip: Clip, label: string, reel: boolean) {
+    this.replay = { clip, t: clip.frames[0].t, hold: 0, cut: -1, hit: 0, label, saved: snap(this.g), reel, began: performance.now() };
+    this.setReplayLook(true);
+    if (!this.d.attract) swoosh();
+  }
+
+  /** Attract mode: play the CPU game on, unseen (a few seconds of game a frame), until a big play has been filmed,
+   *  then show it. When a game ends, a new one tips off. */
+  private attractSearch() {
+    let g = this.g;
+    for (let k = 0; k < 300 && !this.replay; k++) {
+      if (g.over) {
+        g = this.g = lineupGame(this.d.home, this.d.away, this.d.dex, this.d.size, (this.d.seed = (this.d.seed * 31 + 7) >>> 0));
+        this.rec = new Recorder(6);
+        this.spotter = new ClipSpotter();
+        this.pendingClips = [];
+      }
+      step(g, g.players.map((p) => this.brains[p.i](g, DT)), DT);
+      this.coach(g);
+      this.rec.push(g);
+      for (const e of g.events) {
+        const clip = this.spotter.spot(e, g);
+        if (clip) this.pendingClips.push(clip);
+      }
+      const done = this.pendingClips.find((c) => g.time >= c.end || g.over);
+      if (!done) continue;
+      this.pendingClips = this.pendingClips.filter((c) => c !== done);
+      done.frames = this.rec.between(done.start, Math.min(done.end, g.time));
+      if (done.frames.length >= 20) this.startReplay(done, "", false);
+    }
+  }
+
+  private endReplay() {
+    const r = this.replay!;
+    this.applySnap(r.saved); // back to the real game, exactly where it stopped
+    this.replay = null;
+    this.setReplayLook(false);
+    if (!r.reel) return;
+    const next = this.reel.shift();
+    if (next) this.startReplay(next, `TOP PLAYS #${this.reel.length + 1}`, true);
+    else this.overNow();
+  }
+
+  /** After the final buzzer's celebration: the top plays reel (#3 up to #1), then the results. */
+  private finishGame() {
+    if (this.gone) return;
+    const top = this.topClips.slice(0, LIVE.topPlays);
+    if (!top.length || this.tutor) return this.overNow();
+    this.reel = [...top].reverse();
+    const first = this.reel.shift()!;
+    this.startReplay(first, `TOP PLAYS #${this.reel.length + 1}`, true);
+  }
+
+  private overNow() {
+    this.d.onOver([...this.g.score] as [number, number], this.g.timed ? liveResult(this.g) : null);
+  }
+
+  /** Put the players and ball where a snapshot has them (the game itself is paused). */
+  private applySnap(s: Snap) {
+    const g = this.g;
+    s.players.forEach((q, i) => Object.assign(g.players[i], { x: q.x, y: q.y, z: q.z, vx: q.vx, vy: q.vy, act: q.act, onFire: q.onFire, p: q.p }));
+    Object.assign(g.ball, { x: s.ball.x, y: s.ball.y, z: s.ball.z, holder: s.ball.holder, flight: s.ball.flight });
+  }
+
+  /** Replay angles see your own end: give it its stands and a solid hoop with its pole. */
+  private setReplayLook(on: boolean) {
+    for (const o of this.nearOnly) o.visible = on;
+    for (const f of this.nearFade) f.m.opacity = on ? f.on : f.o;
+    for (const gh of this.ghosts) gh.visible = false;
+    if (!on) {
+      this.camera.fov = 52;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /** Move the replay on (slow motion round the key moments), set the scene to that moment, fire the effects. */
+  private runReplay(dt: number, now: number) {
+    const r = this.replay!, c = r.clip, last = c.frames[c.frames.length - 1].t;
+    if (this.tapped.size && now - r.began > 400) return this.endReplay(); // any key skips (not one you were mashing)
+    r.t = Math.min(last, r.t + dt * replaySpeed(c, r.t));
+    if (r.t >= last && (r.hold += dt) > 0.6) return this.endReplay();
+    while (r.hit < c.keys.length && r.t >= c.keys[r.hit]) this.replayImpact(c, r.hit++, now);
+    this.applySnap(frameAt(c.frames, r.t));
+  }
+
+  /** The moment it all happens: a boom, a flash, a shockwave, the rim bending; dust when ankles go. */
+  private replayImpact(c: Clip, k: number, now: number) {
+    const s = c.frames.length ? frameAt(c.frames, c.keys[k]) : snap(this.g), star = s.players[c.who], b = s.ball; // live: right now
+    const sfx = (play: () => void) => this.d.attract || play(); // the title screen's clips are silent
+    if (c.kind === "dunk") {
+      const end = c.side === 0 ? 1 : 0;
+      sfx(boom);
+      this.shake = 0.45;
+      this.replayFlashUntil = now + 80;
+      this.bend = { until: now + 450, end };
+      this.impactAt = { x: W / 2, y: end === 1 ? L - COURT.hoopIn : COURT.hoopIn, z: COURT.rimZ, t: now };
+    } else if (c.kind === "block" || c.kind === "chase") {
+      sfx(() => blip(140, 140, 0.12));
+      this.shake = 0.3;
+      this.replayFlashUntil = now + 60;
+      this.impactAt = { x: b.x, y: b.y, z: b.z, t: now };
+    } else if (c.kind === "ankles") {
+      const v = c.vs != null ? s.players[c.vs] : star;
+      sfx(() => blip(220, 90, 0.08));
+      this.dustAt = { x: v.x, y: v.y, t: now };
+    } else if (c.kind === "stepback" && k === 0) {
+      sfx(() => blip(330, 50, 0.06));
+      this.dustAt = { x: star.x, y: star.y, t: now };
+    } else sfx(() => blip(1320, 70, 0.05)); // the swish
+  }
+
+  /** A replay or a live cinematic is on: a clean picture (no rings), the cinematic camera and effects. */
+  private get cinematic() {
+    return !!(this.replay || this.cine);
+  }
+  /** The clip being filmed and where we are in it: a replay's playback time, or the live game's clock. */
+  private get filming() {
+    return this.replay ? { clip: this.replay.clip, t: this.replay.t } : this.cine ? { clip: this.cine.clip, t: this.g.time } : null;
+  }
+
+  /** After each step: someone sprinting at the hoop takes off for a slam → cut live to the dunk camera (replay.ts
+   *  script), slow the game round the slam, fire the effects when it goes in, and cut back once they land. */
+  private watchForCine(now: number) {
+    const g = this.g, c = this.cine;
+    if (c) {
+      const star = g.players[c.clip.who];
+      for (const e of g.events) {
+        if (e.kind === "make" && e.who === c.clip.who) this.replayImpact(c.clip, c.clip.keys.length - 1, now);
+        if (e.kind === "block" && e.vs === c.clip.who && e.who != null) {
+          // stuffed! hold the shot a beat longer and shout about it; the slow motion moves to the block
+          this.bigBlock(e.who, now);
+          c.clip.end = g.time + 1.3;
+          c.clip.keys = [g.time];
+        }
+      }
+      const landed = c.clip.kind === "dunk" && !this.cineBlocked && star.act !== "dunk" && star.z === 0 && g.time > c.clip.keys[0];
+      if (g.time > c.clip.end || landed || g.over) this.endCine();
+    } else if (LIVE.liveCine >= 1 && !g.over && g.time - this.lastCineAt >= LIVE.cineGap) {
+      const go = (kind: Clip["kind"], who: number, keys: number[], end: number, vs?: number) => {
+        this.cineKey = keys[keys.length - 1];
+        this.cineBlocked = false;
+        this.cineCaption = null;
+        this.cine = { clip: { kind, title: "", who, vs, side: g.players[who].side, start: g.time - 0.6, end, keys, hype: 0, frames: [] }, cut: -1 };
+        this.setReplayLook(true);
+        swoosh();
+      };
+      const f = g.ball.flight;
+      const oop = g.events.find((e) => e.text === "ALLEY-OOP!" && e.who != null);
+      const block = g.events.find((e) => e.kind === "block" && e.who != null);
+      const dunker = g.players.find((pl) => pl.act === "dunk" && this.lastActs[pl.i] !== "dunk" && pl.p.attrs.finishing >= 70);
+      if (oop && f?.oop) {
+        // the lob's in the air: follow the receiver up, then the slam from under the rim
+        const key = g.time + (f.dur - f.t) + LIVE.dunkSlamTime + 0.02;
+        go("dunk", oop.who!, [key], key + 1);
+      } else if (dunker) {
+        const key = g.time + LIVE.dunkTime + 0.12; // when the ball goes through
+        go("dunk", dunker.i, [key], key + 1);
+      } else if (block) {
+        go(block.text.startsWith("CHASE") ? "chase" : "block", block.who!, [g.time], g.time + 1, block.vs);
+        this.bigBlock(block.who!, now);
+      } else if (f?.kind === "shot" && f.points === 3 && f.t <= DT * 1.5 && this.cornerThree(f)) {
+        // from the corner: over the defender's shoulder, riding the ball, then the swish from behind the board
+        go("stepback", f.by, [g.time, g.time + f.dur], g.time + f.dur + 0.9);
+      }
+    }
+    this.lastActs = g.players.map((p) => p.act);
+  }
+
+  /** A three let go from one of the corners (the straight bit of the line, beside the baseline). */
+  private cornerThree(f: { x0: number; y0: number; by: number }) {
+    const hoop = this.g.players[f.by].side === 0 ? { x: W / 2, y: L - COURT.hoopIn } : { x: W / 2, y: COURT.hoopIn };
+    return Math.abs(f.x0 - hoop.x) > COURT.corner - 0.4 && Math.abs(f.y0 - hoop.y) < Math.sqrt(COURT.three ** 2 - COURT.corner ** 2) + 0.6;
+  }
+
+  /** Stuffed! A shake, a flash, a shockwave off the ball, and a big caption over the live cut. */
+  private bigBlock(who: number, now: number) {
+    const g = this.g;
+    this.shake = 0.35;
+    this.replayFlashUntil = now + 70;
+    this.impactAt = { x: g.ball.x, y: g.ball.y, z: g.ball.z, t: now };
+    blip(140, 160, 0.12);
+    const name = g.players[who].p.name.toUpperCase();
+    const lines = ["BIG BLOCK!", `BLOCKED BY ${name}!`, "DENIED!", "REJECTED!", `${name} SAYS NO!`];
+    this.cineCaption = { text: lines[Math.floor(Math.random() * lines.length)], color: g.players[who].side === 0 ? "gold" : "red", at: now };
+    this.cineBlocked = true;
+  }
+
+  /** The ball on fire while it's being slammed or lobbed for an alley-oop, leaving a trail of flame behind it. */
+  private drawBallFire(x: number, y: number, z: number, now: number) {
+    const g = this.g, b = g.ball, h = b.holder != null && !b.flight ? g.players[b.holder] : null;
+    const lit = (h?.act === "dunk") || (b.flight?.kind === "shot" && b.flight.dur < 0.2) || !!b.flight?.oop;
+    this.ballFire.visible = lit;
+    if (lit) {
+      const flick = 1 + (Math.floor(now / 60) % 3) * 0.12;
+      this.ballFire.position.copy(at(x, y, z));
+      this.ballFire.scale.set(0.75 * flick, 0.95 * flick, 1);
+      // drop a flame where the ball is every few frames; they shrink and fade behind it
+      const last = this.trail.reduce((p, q) => (q.t > p.t ? q : p));
+      if (now - last.t > 35) Object.assign(this.trail.reduce((p, q) => (q.t < p.t ? q : p)), { x, y, z, t: now });
+    }
+    for (const tr of this.trail) {
+      const age = (now - tr.t) / 260;
+      tr.sprite.visible = age < 1;
+      if (age >= 1) continue;
+      tr.sprite.position.copy(at(tr.x, tr.y, tr.z + age * 0.3));
+      tr.sprite.scale.setScalar(0.55 * (1 - age) + 0.1);
+      (tr.sprite.material as THREE.SpriteMaterial).opacity = 0.85 * (1 - age);
+    }
+  }
+
+  private endCine() {
+    this.lastCineAt = this.g.time;
+    this.cine = null;
+    this.setReplayLook(false);
+    this.focus.x = this.g.ball.x; // the play camera picks up where the ball is
+    this.focus.y = this.g.ball.y;
+  }
+
+  /** A live cinematic: the cinema bars (the scoreboard waits), a flash, and BIG BLOCK! if it got stuffed. */
+  private drawCineHud() {
+    const c = this.hud, now = performance.now();
+    c.clearRect(0, 0, VIEW_W, VIEW_H);
+    c.fillStyle = PALETTE.white;
+    if (now < this.replayFlashUntil) c.fillRect(0, 0, VIEW_W, VIEW_H);
+    c.fillStyle = PALETTE.black;
+    c.fillRect(0, 0, VIEW_W, 28);
+    c.fillRect(0, VIEW_H - 28, VIEW_W, 28);
+    const cap = this.cineCaption;
+    if (!cap) return;
+    // it slams in big and settles, with a hard shadow
+    const since = now - cap.at, size = since < 120 ? 32 : 24;
+    c.font = `${size}px ${FONT}`;
+    c.textAlign = "center";
+    c.textBaseline = "top";
+    const y = VIEW_H - 28 - size - 14;
+    for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2], [4, 4]]) {
+      c.fillStyle = PALETTE.black;
+      c.fillText(cap.text, VIEW_W / 2 + dx, y + dy);
+    }
+    c.fillStyle = PALETTE[Math.floor(since / 120) % 2 ? cap.color : "white"];
+    c.fillText(cap.text, VIEW_W / 2, y);
+  }
+
+  /** Beeps for the last five seconds of the shot clock, and higher, louder ones for the end of a quarter. */
+  private countdown() {
+    const g = this.g;
+    if (g.practice || g.over) return;
+    const shot = Math.ceil(g.shotClock), clock = g.timed ? Math.ceil(g.clock) : 99;
+    const live = g.dead <= 0 && !g.inBreak;
+    let beep: "shot" | "clock" | null = null;
+    if (live && clock <= 5 && clock >= 1 && clock < this.ticks.clock) beep = "clock";
+    else if (live && shot <= 5 && shot >= 1 && shot < this.ticks.shot && shot < clock) beep = "shot";
+    this.ticks = { shot, clock };
+    if (beep === "clock") blip(1320, 90, 0.07);
+    else if (beep === "shot") blip(880, 50, 0.045);
+  }
+
+  /** In a replay, anyone standing between the camera and the play fades out of the way. */
+  private fadeIfInTheWay(i: number, body: THREE.Sprite, mat: THREE.SpriteMaterial) {
+    const r = this.filming;
+    let fade = false;
+    if (r && i !== r.clip.who && i !== r.clip.vs) {
+      const star = this.bodies[r.clip.who].position;
+      fade = body.position.distanceTo(this.rpos) < star.distanceTo(this.rpos) - 0.6;
+    }
+    if (fade === mat.transparent) return; // already right (switching recompiles the shader, so only on a change)
+    mat.transparent = fade;
+    mat.opacity = fade ? 0.3 : 1;
+    mat.alphaTest = fade ? 0.01 : 0.5;
+    mat.depthWrite = !fade;
+    mat.needsUpdate = true;
+  }
+
+  /** The star stretches in the air and leans into a slam; a broken-ankled defender goes down. Returns any lift. */
+  private replayPose(i: number, pl: Player, body: THREE.Sprite, mat: THREE.SpriteMaterial) {
+    const r = this.filming!, c = r.clip, [sx, sy] = this.baseScale[i];
+    if (i === c.who) {
+      if (pl.z > 0.25) body.scale.set(sx * 0.88, sy * 1.14, 1);
+      if (c.kind === "dunk" && (pl.act === "dunk" || pl.z > 1)) mat.rotation = (this.facing[i] ? -1 : 1) * 0.3;
+    }
+    if (c.kind === "ankles" && i === c.vs && pl.act === "stumble") {
+      const k = Math.max(0, Math.min(1, (r.t - (c.keys[0] - 0.15)) / 0.25));
+      mat.rotation = (this.facing[i] ? -1 : 1) * (Math.PI / 2) * k;
+      return (sx / 2) * Math.abs(Math.sin(mat.rotation));
+    }
+    return 0;
+  }
+
+  /** Afterimages behind the star, the impact shockwave, dust, and the rim and net springing back after a slam. */
+  private drawReplayFx(now: number) {
+    const r = this.filming;
+    const frames = r && (r.clip.frames.length ? r.clip.frames : this.rec.between(r.t - 1, r.t)); // live: the recording so far
+    this.ghosts.forEach((gh, k) => {
+      gh.visible = false;
+      if (!r || !frames?.length) return;
+      const c = r.clip, star = this.g.players[c.who];
+      if (Math.hypot(star.vx, star.vy) < 5 && star.z < 0.5) return; // only when they're flying
+      const past = frameAt(frames, r.t - 0.1 * (k + 1)).players[c.who];
+      const body = this.bodies[c.who], m = gh.material as THREE.SpriteMaterial, map = (body.material as THREE.SpriteMaterial).map;
+      if (m.map !== map) (m.map = map), (m.needsUpdate = true);
+      gh.scale.copy(body.scale);
+      gh.position.copy(at(past.x, past.y, past.z + 0.01));
+      // a trail only reads behind them: when the camera's chasing from behind, it would smear across the star
+      gh.visible = gh.position.distanceTo(this.rpos) > body.position.distanceTo(this.rpos);
+    });
+    const iw = this.impactAt ? (now - this.impactAt.t) / 500 : 1;
+    this.impact.visible = iw < 1;
+    if (this.impactAt && iw < 1) {
+      this.impact.position.copy(at(this.impactAt.x, this.impactAt.y, this.impactAt.z));
+      this.impact.scale.setScalar(1 + iw * 6);
+      (this.impact.material as THREE.MeshBasicMaterial).opacity = 1 - iw;
+    }
+    const dw = this.dustAt ? (now - this.dustAt.t) / 550 : 1;
+    this.dust.forEach((d, k) => {
+      d.visible = dw < 1;
+      if (!this.dustAt || dw >= 1) return;
+      const a = (k / this.dust.length) * Math.PI * 2, rad = 0.25 + dw * 1.1;
+      d.position.copy(at(this.dustAt.x + Math.cos(a) * rad, this.dustAt.y + Math.sin(a) * rad, 0.1 + Math.sin(dw * Math.PI) * 0.35));
+      d.scale.setScalar(0.32 * (1 - dw) + 0.06);
+    });
+    for (const end of [0, 1]) {
+      const rim = this.rims[end], net = this.nets[end];
+      if (!rim || !net) continue;
+      const w = end === this.bend.end ? Math.max(0, (this.bend.until - now) / 450) : 0;
+      const wob = w * Math.cos((1 - w) * 18); // a springy wobble that dies away
+      rim.position.y = COURT.rimZ - 0.09 * wob;
+      net.position.y = COURT.rimZ - 0.21 - 0.12 * Math.abs(wob);
+      net.scale.y = 1 + 0.6 * Math.abs(wob);
+    }
+  }
+
+  /** The replay's camera: the clip's script (replay.ts), gliding within an angle and jumping on a cut. */
+  private cinemaCamera(dt: number, clip: Clip, t: number, s: Snap, r: { cut: number }) {
+    const sh = cameraFor(clip, t, s);
+    // keep it out of the stands
+    const pos = at(Math.max(-1, Math.min(W + 1, sh.pos[0])), Math.max(-1.3, Math.min(L + 1.3, sh.pos[1])), Math.max(0.3, sh.pos[2]));
+    const look = at(...sh.look);
+    const k = Math.min(1, dt * 7);
+    if (r.cut !== sh.cut) {
+      r.cut = sh.cut;
+      this.rpos.copy(pos);
+      this.rlook.copy(look);
+      this.camera.fov = sh.fov;
+    } else {
+      this.rpos.lerp(pos, k);
+      this.rlook.lerp(look, k);
+      this.camera.fov += (sh.fov - this.camera.fov) * k;
+    }
+    if (this.shake > 0) this.shake -= dt;
+    this.camera.position.copy(this.rpos);
+    if (this.shake > 0) {
+      this.camera.position.x += Math.sin(this.shake * 90) * 0.1;
+      this.camera.position.y += Math.cos(this.shake * 70) * 0.1;
+    }
+    this.camera.lookAt(this.rlook);
+    this.camera.updateProjectionMatrix();
+    this.camera.updateMatrixWorld();
+  }
+
+  /** Cinema bars, a blinking REPLAY tag, SLOW-MO, and the title card sliding in. */
+  private drawReplayHud(now: number) {
+    const c = this.hud, r = this.replay!, clip = r.clip, g = this.g;
+    c.clearRect(0, 0, VIEW_W, VIEW_H);
+    const rect = (x: number, y: number, w: number, h: number, n: PaletteName) => {
+      c.fillStyle = PALETTE[n];
+      c.fillRect(x, y, w, h);
+    };
+    const text = (s: string, x: number, y: number, n: PaletteName, size = 8, align: CanvasTextAlign = "left") => {
+      c.font = `${size}px ${FONT}`;
+      c.textAlign = align;
+      c.textBaseline = "top";
+      c.fillStyle = PALETTE[n];
+      c.fillText(s, x, y);
+    };
+    if (now < this.replayFlashUntil) rect(0, 0, VIEW_W, VIEW_H, "white");
+    const BAR = 34;
+    rect(0, 0, VIEW_W, BAR, "black");
+    rect(0, VIEW_H - BAR, VIEW_W, BAR, "black");
+    if (Math.floor(now / 400) % 2 === 0) rect(14, 13, 8, 8, "red");
+    text(r.label, 28, 13, "white");
+    if (replaySpeed(clip, r.t) < 0.6 && Math.floor(now / 250) % 2 === 0) text("SLOW-MO", VIEW_W - 14, 13, "amber", 8, "right");
+    const slide = Math.min(1, (now - r.began) / 300), x = Math.round(-320 + 336 * slide);
+    c.font = `16px ${FONT}`;
+    const tw = Math.ceil(c.measureText(clip.title).width);
+    rect(x - 8, VIEW_H - BAR - 30, tw + 16, 26, "black");
+    rect(x - 8, VIEW_H - BAR - 4, tw + 16, 2, clip.side === 0 ? this.d.youColor : this.d.cpuColor);
+    text(clip.title, x, VIEW_H - BAR - 25, "gold", 16);
+    const star = g.players[clip.who].p.name.toUpperCase(), vs = clip.vs != null ? g.players[clip.vs].p.name.toUpperCase() : "";
+    text(`${star}${vs ? ` ON ${vs}` : ""} - ${g.names[clip.side].toUpperCase()}`, x, VIEW_H - BAR + 8, "white");
+    text("ANY KEY: SKIP", VIEW_W - 14, VIEW_H - BAR + 20, "steel", 8, "right");
   }
 
   /** Behind your end, looking up the court at the hoop you attack, sliding along with the ball, but never so far
@@ -1266,55 +1828,78 @@ export class LiveView {
     c.globalAlpha = 1;
   }
 
-  private drawIntro(rect: (x: number, y: number, w: number, h: number, n: PaletteName) => void, text: (s: string, x: number, y: number, n: PaletteName, size?: number, align?: CanvasTextAlign) => void) {
-    rect(110, 70, 420, 220, "white");
-    rect(112, 72, 416, 216, "black");
-    const cx = VIEW_W / 2, g = this.g;
-    const title = this.tutor
-      ? "HOW TO PLAY"
-      : g.size === 1
-        ? `${g.players[0].p.name} VS ${g.players[1].p.name}`
-        : `${g.size}V${g.size}: ${g.names[0]} VS ${g.names[1]}`;
-    text(title.toUpperCase().slice(0, 48), cx, 84, "gold", 8, "center");
+  private drawIntro(
+    rect: (x: number, y: number, w: number, h: number, n: PaletteName) => void,
+    text: (s: string, x: number, y: number, n: PaletteName, size?: number, align?: CanvasTextAlign, shadow?: boolean) => void,
+  ) {
+    const c = this.hud, cx = VIEW_W / 2, g = this.g, now = performance.now();
+    // dim the court so the card stands out, then a gold-edged panel
+    c.globalAlpha = 0.6;
+    rect(0, 0, VIEW_W, VIEW_H, "black");
+    c.globalAlpha = 1;
+    rect(36, 36, VIEW_W - 72, VIEW_H - 72, "gold");
+    rect(38, 38, VIEW_W - 76, VIEW_H - 76, "black");
+    rect(42, 42, VIEW_W - 84, VIEW_H - 84, "night");
+    // the matchup: team-coloured name plates, VS between them
+    const names: [string, string] = g.size === 1 ? [g.players[0].p.name, g.players[1].p.name] : [g.names[0], g.names[1]];
+    if (this.tutor) {
+      rect(cx - 120, 52, 240, 26, this.d.youColor);
+      text("HOW TO PLAY", cx, 58, inkOn(this.d.youColor), 16, "center", inkOn(this.d.youColor) === "white");
+    } else {
+      rect(56, 52, 236, 26, this.d.youColor);
+      rect(VIEW_W - 292, 52, 236, 26, this.d.cpuColor);
+      // dark ink on a light team colour, white (with a shadow) on a dark one
+      text(names[0].toUpperCase().slice(0, 13), 174, 58, inkOn(this.d.youColor), 16, "center", inkOn(this.d.youColor) === "white");
+      text(names[1].toUpperCase().slice(0, 13), VIEW_W - 174, 58, inkOn(this.d.cpuColor), 16, "center", inkOn(this.d.cpuColor) === "white");
+      text("VS", cx, 58, "gold", 16, "center", true);
+    }
     const sub = this.tutor
       ? `${STEPS.length} QUICK STEPS - YOU ATTACK THE FAR HOOP`
       : g.timed ? "4 QUARTERS OF 1:30 - YOU ATTACK THE FAR HOOP" : `FIRST TO ${g.target} - YOU ATTACK THE FAR HOOP`;
-    text(sub, cx, 100, "cloud", 8, "center");
-    // your own keys (the CONTROLS screen in the pause menu changes them)
+    // the format on a red ribbon
+    const rw = sub.length * 8 + 24;
+    rect(cx - rw / 2, 86, rw, 16, "red");
+    text(sub, cx, 90, "white", 8, "center");
+    // your own keys (the CONTROLS screen in the pause menu changes them), as pixel key caps in two columns
     const n = (a: Action) => keyName(this.keys[a]);
-    const move = `ARROWS/${n("up")}${n("left")}${n("down")}${n("right")}`, shoot = `${n("shoot")}/SPACE`;
-    const rows: [string, string][] =
-      g.size === 1
-        ? [
-          [move, "MOVE"],
-          [n("turbo"), "TURBO"],
-          [shoot, "HOLD, LET GO AT THE LINE: SHOOT"],
-          [shoot, "ON DEFENCE: JUMP TO BLOCK"],
-          [`${n("turbo")}+${n("shoot")}`, "DUNK NEAR THE RIM"],
-          [n("cross"), "ON DEFENCE: STEAL"],
-          [n("cross"), "CROSSOVER"],
-          [n("music"), "MUSIC ON/OFF"],
-          ["ESC", "PAUSE (AND CONTROLS)"],
-        ]
-        : [
-          [move, "MOVE"],
-          [n("turbo"), "TURBO"],
-          [shoot, "HOLD, LET GO AT THE LINE: SHOOT"],
-          [shoot, "ON DEFENCE: JUMP TO BLOCK"],
-          [`${n("turbo")}+${n("shoot")}`, "DUNK NEAR THE RIM"],
-          [n("pass"), "PASS (ON DEFENCE: SWITCH)"],
-          ["1-5", "PASS TO THAT PLAYER"],
-          [n("cross"), "CROSSOVER (DEFENCE: STEAL)"],
-          [n("plays"), "CALL A PLAY / PICK A DEFENCE"],
-          [n("music"), "MUSIC ON/OFF"],
-          ["ESC", "PAUSE (AND CONTROLS)"],
-        ];
-    const gap = rows.length > 10 ? 12 : rows.length > 9 ? 13 : 14;
-    rows.forEach(([k, v], i) => {
-      text(k, 136, 118 + i * gap, "white");
-      text(v, 248, 118 + i * gap, "fog");
-    });
-    if (Math.floor(performance.now() / 500) % 2) text("PRESS ENTER TO TIP OFF", cx, 260, "gold", 8, "center");
+    const team = g.size > 1, move = `${n("up")}${n("left")}${n("down")}${n("right")}`, shoot = `${n("shoot")}/SPC`;
+    const offence: [string, string][] = [
+      [move, "MOVE (OR ARROWS)"],
+      [n("turbo"), "SPRINT"],
+      [shoot, "HOLD, LET GO: SHOOT"],
+      [`${n("turbo")}+${n("shoot")}`, "DUNK AT THE RIM"],
+      ...(team ? ([[n("pass"), "PASS"], ["1-5", "PASS TO A SLOT"], [n("plays"), "CALL A PLAY"]] as [string, string][]) : []),
+      [n("cross"), "CROSSOVER"],
+    ];
+    const defence: [string, string][] = [
+      [shoot, "JUMP / BLOCK"],
+      [n("cross"), "STEAL"],
+      ...(team ? ([[n("pass"), "SWITCH PLAYER"], [n("plays"), "PICK A DEFENCE"]] as [string, string][]) : []),
+    ];
+    const game: [string, string][] = [[n("music"), "MUSIC"], ["ESC", "PAUSE"]];
+    const cap = (k: string, x: number, y: number, lit = false) => {
+      const w = k.length * 8 + 8;
+      rect(x, y, w, 15, lit ? "gold" : "white");
+      rect(x + 1, y + 1, w - 2, 12, "black");
+      text(k, x + 4, y + 4, lit ? "gold" : "white");
+      return w;
+    };
+    const column = (title: string, list: [string, string][], x: number, y: number) => {
+      text(title, x, y, "gold");
+      rect(x, y + 11, 250, 1, "slate");
+      list.forEach(([k, label], i) => {
+        const w = cap(k, x, y + 18 + i * 19);
+        text(label, x + w + 8, y + 22 + i * 19, "cloud");
+      });
+    };
+    column("OFFENCE", offence, 58, 114);
+    column("DEFENCE", defence, 338, 114);
+    column("GAME", game, 338, 114 + 18 + defence.length * 19 + 8);
+    // tip off: a blinking ENTER key
+    const on = Math.floor(now / 450) % 2 === 0, w = 13 * 8 + 8 + 8 + 6 * 8;
+    const x = cx - w / 2;
+    cap("ENTER", x, VIEW_H - 64, on);
+    text("TIP OFF!", x + 6 * 8 + 16, VIEW_H - 60, on ? "gold" : "fog");
   }
 }
 

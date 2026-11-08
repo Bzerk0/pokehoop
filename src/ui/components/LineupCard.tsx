@@ -6,6 +6,7 @@ import type { RatedPokemon } from "../../core/types.ts";
 import { BALL_URL } from "../art/ballLogo.ts";
 import { inkOn, PALETTE, type PaletteName } from "../theme/palette.ts";
 import { Sprite } from "./PlayerCard.tsx";
+import { GAME_NAME } from "../name.ts";
 
 export const CARD_W = 640;
 export const CARD_H = 360;
@@ -73,7 +74,7 @@ export const LineupCard = forwardRef<HTMLDivElement, { lineup: Lineup; dex: Map<
 
       <div className="absolute inset-x-0 bottom-0 flex h-[24px] items-center justify-between bg-black px-4 font-head text-[8px] text-fog">
         <span>
-          STARTING 5 · {lineup.mode.toUpperCase()} · PAYROLL <span className="text-lime">${payroll(lineup, dex)}M</span> / ${SALARY_CAP}M
+          {GAME_NAME} · {lineup.mode.toUpperCase()} · PAYROLL <span className="text-lime">${payroll(lineup, dex)}M</span> / ${SALARY_CAP}M
         </span>
         <span>A FREE POKéMON HOOPS FAN GAME</span>
       </div>

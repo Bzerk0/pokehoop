@@ -9,6 +9,7 @@ import { BALL_URL } from "../art/ballLogo.ts";
 import { PALETTE } from "../theme/palette.ts";
 import { Band, Bezel, CAB_W, DeckControls, Stripes } from "./cabinetParts.tsx";
 import { STAGE_H } from "./PixelStage.tsx";
+import { GAME_NAME } from "../name.ts";
 
 type Pt = { y: number; z: number }; // a point on the side profile
 
@@ -308,7 +309,7 @@ export function Cabinet3D({ children, front, screenTop, stageH }: { children: Re
           >
             <img src={BALL_URL} width={64} height={64} alt="" />
             <span className="font-head text-[32px] text-gold" style={{ textShadow: `3px 3px 0 ${PALETTE.red}` }}>
-              STARTING 5
+              {GAME_NAME}
             </span>
             <img src={BALL_URL} width={64} height={64} alt="" />
           </div>
@@ -341,7 +342,7 @@ export function Cabinet3D({ children, front, screenTop, stageH }: { children: Re
         </Face>
         <Face y={CP_FACE.y} z={CP_FACE.z} turn={`rotateX(${CP_FACE.deg}deg)`} w={CAB_W} h={CP_FACE.h} className="flex items-center justify-center overflow-hidden border-2 border-black bg-navy">
           <div className="absolute inset-x-0 top-0 h-[6px] bg-red" />
-          <span className="font-head text-[24px] text-gold" style={{ textShadow: `2px 2px 0 ${PALETTE.red}` }}>STARTING 5</span>
+          <span className="font-head text-[24px] text-gold" style={{ textShadow: `2px 2px 0 ${PALETTE.red}` }}>{GAME_NAME}</span>
         </Face>
 
         {/* lower body, under the control panel */}

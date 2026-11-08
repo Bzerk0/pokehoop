@@ -127,6 +127,13 @@ export class Tutorial {
       this.begin();
       return null;
     }
+    // the CPU stands still outside the defence step, so if it ends up with the ball (your shot went in, or it got the
+    // rebound) it would hold it for ever: put the ball back in your hands for another go
+    const g = this.g, h = g.ball.holder != null && !g.ball.flight ? g.players[g.ball.holder] : null;
+    if (!this.step.cpu && ((h && h.side === 1) || (g.dead > 0 && g.next === 1))) {
+      g.dead = 0;
+      (this.step.setup ?? ((g2: Game) => ready(g2, 8)))(g);
+    }
     const you = this.g.players[this.g.control];
     this.t += dt;
     this.moved += dist(you, this.last);

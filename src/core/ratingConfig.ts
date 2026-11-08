@@ -169,6 +169,16 @@ export const LIVE = {
   screenTime: 0.7, // seconds held up
   screenSlow: 0.3, // speed share while held up
   menuSlow: 0.08,
+  // instant replays and the top plays reel (src/game/replay.ts)
+  replays: 1, // 1 = instant replays on, 0 = off (the top plays reel still runs)
+  liveCine: 1, // 1 = live cinematic cuts (dunks, alley-oops, blocks, corner threes), 0 = off
+  cineGap: 2, // game seconds after one live cut before the next can start
+  replayMin: 3, // hype a play needs for an instant replay
+  replayGap: 30, // game seconds between instant replays
+  replaySlow: 0.25, // slow-motion speed at the key moment
+  replaySlowSpan: 0.3, // seconds either side of the key moment at full slow-mo (it eases back over the same again)
+  topPlays: 3, // plays in the end-of-game reel
+  replayHype: { oop: 4.5, dunk: 3, stepback: 3, ankles: 3, block: 3, chase: 4, buzzer: 3 }, // buzzer: added to whatever it was
   sidePlays: 6, // seconds the one-character mode's side play list shows at the start of a possession // game speed while the play / scheme menu is open
   // the full game (Phase 8): 4 × 1:30 running clock, 1:00 overtimes (SIM.quarterSec / SIM.overtimeSec)
   periodBreak: 2.5, // seconds between periods
@@ -217,6 +227,11 @@ export const LIVE = {
   contestPenalty: 0.22, // make chance lost to a full contest
   dunkRange: 2.4, // turbo + K this close goes to the rim
   dunkTime: 0.45,
+  oopRange: 3.4, // metres from the rim a receiver can be for a pass to become an alley-oop
+  oopFinishing: 60, // Finishing a receiver needs to catch and slam one
+  dunkApex: 0.55, // metres the ball rises above the rim before the slam
+  dunkSlamTime: 0.08, // seconds for the ball to be hammered down through the rim (speeding up all the way)
+  dunkSlam: 6, // m/s the dunker is pulled down with the slam
   // jumping and blocking
   gravity: 14,
   jumpMin: 4.2, // take-off speed m/s (from Finishing + Rebounding)
