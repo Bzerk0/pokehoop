@@ -13,6 +13,7 @@ import { useRated } from "../data.ts";
 import { backBlip, coin, moveBlip, selectBlip } from "../sound.ts";
 import { PALETTE } from "../theme/palette.ts";
 import { useMusic } from "../bgm.ts";
+import { usePortraitTouch } from "../touch.ts";
 
 /** The title screen, arcade attract-mode style: a CPU game's big plays roll in the background through the replay
  *  cameras (LiveView's `attract` mode), the logo sits on top, and INSERT COIN blinks until you press a key; then the
@@ -27,6 +28,7 @@ export function Title() {
   const [message, setMessage] = useState("");
   const [host, setHost] = useState<HTMLDivElement | null>(null); // the cabinet remounts the screen when it changes view
   const { data } = useRated();
+  const portrait = usePortraitTouch(); // a phone held upright: the whole cabinet, then a full-screen menu
 
   // five random Pokémon (UI flair; core code never uses Math.random): a new player's first team, with room under the
   // cap for a bench
@@ -95,7 +97,9 @@ export function Title() {
   // arrows move (left/right between the big two, down to the small ones), Enter/Space picks, Esc steps back
   useEffect(() => {
     if (stage !== "menu") return;
-    const MOVES: Record<string, number[]> = { ArrowLeft: [1, 0, 2, 3], ArrowRight: [1, 0, 2, 3], ArrowDown: [2, 2, 3, 3], ArrowUp: [0, 1, 0, 2] };
+    const MOVES: Record<string, number[]> = portrait
+      ? { ArrowDown: [1, 2, 3, 3], ArrowUp: [0, 0, 1, 2] } // portrait: one column
+      : { ArrowLeft: [1, 0, 2, 3], ArrowRight: [1, 0, 2, 3], ArrowDown: [2, 2, 3, 3], ArrowUp: [0, 1, 0, 2] };
     const onKey = (e: KeyboardEvent) => {
       if (message) return void (e.preventDefault(), backBlip(), setMessage("")); // any key closes ABOUT
       if (e.key in MOVES) {
@@ -125,12 +129,8 @@ export function Title() {
     </button>
   );
 
-  return (
-    <ArcadeCabinet view={stage === "cabinet" ? "3d" : "flat"}>
-      <div className="absolute inset-0 overflow-hidden bg-black" onClick={() => stage !== "menu" && press()}>
-        <div ref={setHost} className="absolute inset-0" />
-
-        {/* the logo, dropping in on top of the action */}
+  // the logo, dropping in on top of the action
+  const logo = (
         <div className="t-anim t-logo pointer-events-none absolute left-0 right-0 top-[18px] flex flex-col items-center">
           <div className="flex items-center gap-[12px]">
             <img src={BALL_URL} width={BALL_SIZE * 2} height={BALL_SIZE * 2} alt="" className="t-anim t-spin-ball" />
@@ -155,6 +155,53 @@ export function Title() {
             <span className="h-[18px] w-[10px] bg-maroon" style={{ clipPath: "polygon(0 0,100% 0,50% 50%,100% 100%,0 100%)" }} />
           </div>
         </div>
+  );
+  const notice = (
+    <div className="pointer-events-none absolute bottom-[6px] left-0 right-0 text-center font-head text-[8px] text-cloud" style={{ textShadow: `1px 1px 0 ${PALETTE.black}` }}>
+      FREE FAN GAME - POKéMON © NINTENDO / CREATURES / GAME FREAK
+    </div>
+  );
+
+  // portrait, coin in: a menu filling the whole screen, the big plays playing behind it cropped to fill
+  if (portrait && stage === "menu") {
+    const stacked = (i: number, cls: string, size: number) => (
+      <button
+        key={i}
+        className={`flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
+        style={{ fontSize: size, boxShadow: `4px 4px 0 ${PALETTE.black}` }}
+        onClick={() => (setPick(i), choose(i))}
+      >
+        {pick === i && <span className="blink"><Arrow /></span>}
+        {items[i].label}
+      </button>
+    );
+    return (
+      <div className="relative h-full w-full overflow-hidden bg-black">
+        <div ref={setHost} className="absolute inset-0 [&_canvas]:!h-full [&_canvas]:!w-full [&_canvas]:object-cover" />
+        <div className="pointer-events-none absolute inset-0 bg-black/40" />
+        {/* (a phone's narrower than the logo: a bit smaller) */}
+        <div className="absolute inset-x-0 top-0 h-[150px] origin-top scale-[0.8]">{logo}</div>
+        <div className="absolute inset-x-0 top-[38%] flex flex-col items-center gap-4 px-6">
+          {stacked(0, "h-[84px] w-full max-w-[340px]", 28)}
+          {stacked(1, "h-[84px] w-full max-w-[340px]", 28)}
+          {stacked(2, "mt-2 h-[44px] w-[70%] max-w-[240px]", 12)}
+          {stacked(3, "h-[44px] w-[70%] max-w-[240px]", 12)}
+        </div>
+        {message && (
+          <button className="px-box absolute inset-x-6 top-[38%] p-[12px] text-left text-[22px] leading-[22px] text-cloud" onClick={() => (backBlip(), setMessage(""))}>
+            {message}
+          </button>
+        )}
+        {notice}
+      </div>
+    );
+  }
+
+  return (
+    <ArcadeCabinet view={stage === "cabinet" ? "3d" : "flat"} portrait={portrait}>
+      <div className="absolute inset-0 overflow-hidden bg-black" onClick={() => stage !== "menu" && press()}>
+        <div ref={setHost} className="absolute inset-0" />
+        {logo}
 
         {stage !== "menu" ? (
           <div className="blink absolute bottom-[24px] left-0 right-0 text-center font-head text-[16px] text-white" style={{ textShadow: `2px 2px 0 ${PALETTE.black}, 4px 4px 0 ${PALETTE.red}` }}>
@@ -174,9 +221,7 @@ export function Title() {
           </>
         )}
         {/* the fan-game notice along the bottom, arcade style */}
-        <div className="pointer-events-none absolute bottom-[6px] left-0 right-0 text-center font-head text-[8px] text-cloud" style={{ textShadow: `1px 1px 0 ${PALETTE.black}` }}>
-          FREE FAN GAME - POKéMON © NINTENDO / CREATURES / GAME FREAK
-        </div>
+        {notice}
       </div>
     </ArcadeCabinet>
   );

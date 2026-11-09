@@ -18,7 +18,9 @@ import { DevPanel } from "../components/DevPanel.tsx";
 import { Arrow } from "../components/Arrow.tsx";
 import { useMusic } from "../bgm.ts";
 import { TouchControls } from "../components/TouchControls.tsx";
-import { isTouch, useScrollToStart } from "../touch.ts";
+import { isIphoneBrowser, isTouch, useScrollToStart } from "../touch.ts";
+import { TipOff } from "../components/TipOff.tsx";
+import { reducedMotion } from "../components/Cabinet3D.tsx";
 
 applyDevSettings(); // the dev menu's saved tuning, before any game starts
 
@@ -37,6 +39,8 @@ export type ArcadeSetup = {
   cpuColor: PaletteName;
   level: Difficulty;
   tutorial?: boolean; // HOW TO PLAY: a practice 3v3, step by step
+  /** Where PRE-GAME goes back to: this team and opponent, that mode's character select. */
+  back?: { team: string; select: 1 | 3 | 5 | "solo" | "half" | null; difficulty: Difficulty; oppSeed: number };
 };
 
 /** An old link or a stale history entry (from an earlier version) goes back to the pre-game screen. */
@@ -73,6 +77,7 @@ export function ArcadePage() {
   const [listening, setListening] = useState<Action | null>(null); // waiting for the new key for this action
   const [pickOut, setPickOut] = useState<number | null>(null); // the court player chosen to come off
   const [, refresh] = useState(0); // re-read the roster after a sub
+  const [simming, setSimming] = useState<GameResult | null>(null); // "sim the rest": the tip-off playback is on
   const [final, setFinal] = useState<{ score: [number, number]; result: GameResult | null } | null>(null);
 
   useEffect(() => {
@@ -151,7 +156,7 @@ export function ArcadePage() {
   }, [paused, final]);
 
   // TEST (iPhone in Safari): scroll down first, so Safari tucks its bars away; then the page locks
-  const scrollFirst = useScrollToStart();
+  const [scrollFirst, scrollAgain] = useScrollToStart();
 
   if (!setup) return <Navigate to="/play" replace />;
 
@@ -163,7 +168,7 @@ export function ArcadePage() {
   };
   const toPreGame = () => {
     backBlip();
-    navigate("/play");
+    navigate("/play", { state: setup?.back }); // back to the same team, opponent and character select
   };
   /** After the lesson: straight into a real 5v5 with the same teams. */
   const playForReal = () => {
@@ -178,8 +183,15 @@ export function ArcadePage() {
     selectBlip();
     const result = g.simRest();
     setPaused(false);
-    setFinal({ score: [score(result.teams[0]), score(result.teams[1])], result });
+    // the same playback as SIM GAME on the Play page, then the results
+    if (reducedMotion()) setFinal({ score: [score(result.teams[0]), score(result.teams[1])], result });
+    else setSimming(result);
   };
+
+  if (simming) {
+    const r = simming;
+    return <TipOff result={r} home={setup.home} away={setup.away} onDone={() => (setSimming(null), setFinal({ score: [score(r.teams[0]), score(r.teams[1])], result: r }))} />;
+  }
 
   // ── a full game's final: the results screen, box score and all ──
   if (final?.result && dex) {
@@ -208,12 +220,13 @@ export function ArcadePage() {
 
   return (
     <div className="h-full min-h-[360px]" style={touch ? { touchAction: scrollFirst ? "pan-y" : "none" } : undefined /* no scrolling or zooming the game on a phone */}>
-      {touch && dex && !paused && !final && !scrollFirst && <TouchControls team={setup.size > 1} nearRim={() => !!game.current?.nearRim} />}
+      {touch && dex && !paused && !final && !scrollFirst && <TouchControls team={setup.size > 1} nearRim={() => !!game.current?.nearRim} onBack={toPreGame} />}
       {scrollFirst && (
         <div className="pointer-events-none fixed inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/70 px-16 text-center [@media(orientation:portrait)]:bg-black">
           {/* sideways first; then the scroll (it tucks Safari's bars away) */}
           <span className="hidden font-head text-[16px] leading-[1.6] text-gold [@media(orientation:portrait)]:inline">TURN YOUR PHONE SIDEWAYS</span>
           <span className="hidden text-[24px] text-cloud [@media(orientation:portrait)]:inline">The court needs the whole screen.</span>
+          <button className="px-btn pointer-events-auto hidden [@media(orientation:portrait)]:inline-flex" onClick={toPreGame}><Arrow left /> BACK</button>
           <span className="blink font-head text-[16px] leading-[1.6] text-gold [@media(orientation:portrait)]:hidden">SCROLL DOWN TO START</span>
           <span className="text-[24px] text-cloud [@media(orientation:portrait)]:hidden">
             Swipe up from the very right side of your screen.
@@ -352,6 +365,8 @@ export function ArcadePage() {
                       <button className="px-btn flex-1 !py-0 !text-[20px]" onClick={() => (moveBlip(), setView("dev"))}>DEV (`)</button>
                     </span>
                   )}
+                  {/* iPhone: the scroll-to-start screen again, for when Safari's bars come back */}
+                  {!final && isIphoneBrowser() && <button className="px-btn w-full !py-0 !text-[20px]" onClick={() => (moveBlip(), setPaused(false), scrollAgain())}>HIDE ADDRESS BAR</button>}
                   {!final && live?.canSimRest && <button className="px-btn w-full !py-0 !text-[20px]" onClick={simRest}>SIM THE REST <Arrow /></button>}
                   <button className="px-btn w-full !py-0 !text-[20px]" autoFocus={!!final && !setup.tutorial} onClick={restart}>
                     {setup.tutorial ? "START OVER" : final ? "REMATCH" : "RESTART"}

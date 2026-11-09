@@ -193,7 +193,9 @@ export function PlayPage() {
   const navigate = useNavigate();
   const { data, error } = useRated();
   const dex = useMemo(() => (data ? dexOf(data) : null), [data]);
-  const navState = useLocation().state as { team?: string; starters?: number[] } | null;
+  const navState = useLocation().state as
+    | { team?: string; starters?: number[]; select?: 1 | 3 | 5 | "solo" | "half" | null; difficulty?: Difficulty; oppSeed?: number }
+    | null;
   // a brand-new player (no teams yet) gets the five from the title screen
   const teams = useMemo(() => {
     if (!dex || !data) return [];
@@ -209,11 +211,12 @@ export function PlayPage() {
     const sent = teams.findIndex((t) => t.key === wanted);
     setPick(sent >= 0 ? sent : Math.max(0, teams.findIndex((t) => ready(t.lineup, dex))));
   }, [dex, teams, wanted]);
-  const [difficulty, setDifficulty] = useState<Difficulty>("PRO");
-  const [oppSeed, setOppSeed] = useState(() => Date.now());
+  // (back from a live game: the same difficulty, opponent and character select)
+  const [difficulty, setDifficulty] = useState<Difficulty>(navState?.difficulty ?? "PRO");
+  const [oppSeed, setOppSeed] = useState(() => navState?.oppSeed ?? Date.now());
   const [result, setResult] = useState<GameResult | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [selecting, setSelecting] = useState<1 | 3 | 5 | "solo" | "half" | null>(null);
+  const [selecting, setSelecting] = useState<1 | 3 | 5 | "solo" | "half" | null>(navState?.select ?? null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -246,8 +249,9 @@ export function PlayPage() {
     const youColor = teamColor(mine.colors[0]);
     const cpuColor = teamColor(cpu.colors[0] === mine.colors[0] ? cpu.colors[1] : cpu.colors[0]);
     selectBlip();
+    const back = { team: teams[pick].key, select: tutorial ? null : half ? "half" as const : solo ? "solo" as const : size, difficulty, oppSeed };
     navigate("/play/live", {
-      state: { home: { ...mine, ids: ids ?? mine.ids, name: mine.name || "YOU" }, away: cpu, size, picks, solo, half, youColor, cpuColor, level, tutorial } satisfies ArcadeSetup,
+      state: { home: { ...mine, ids: ids ?? mine.ids, name: mine.name || "YOU" }, away: cpu, size, picks, solo, half, youColor, cpuColor, level, tutorial, back } satisfies ArcadeSetup,
     });
   };
 

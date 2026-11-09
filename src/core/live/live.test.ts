@@ -5,7 +5,7 @@ import { rateAll } from "../ratings.ts";
 import type { RatedPokemon } from "../types.ts";
 import { makeAi, makeCoach, styleOf } from "./ai.ts";
 import {
-  blockChance, boxes, callPlay, passBall, callScheme, COURT, dist, energyOf, giveBall, hoopOf, keyPlayer, lineupGame, longShotFactor, makeChance, meterWindow, newGame, quickChance,
+  blockChance, boxes, callPlay, passBall, callScheme, COURT, dist, energyOf, giveBall, hoopOf, keyPlayer, liftRating, lineupGame, longShotFactor, makeChance, meterWindow, newGame, quickChance,
   NO_INPUT, shotWindow, spotOf, step, timingOf, type Game, type GameEvent, type Input,
 } from "./game.ts";
 import { canSimRest, simTheRest } from "./handover.ts";
@@ -822,31 +822,101 @@ describe("long shots and double jumps", () => {
     expect(g3.events.some((e) => e.text === "HOLD FOR A THREE")).toBe(true);
   });
 
-  it("half-court 1v1: both attack the far hoop, a stop means taking it back, a make means a check at the top", () => {
+  it("streetball: each side plays at its own hoop, checked at the top of its key; a steal stops play for a check", () => {
     const g = newGame([named("lucario")], [named("garchomp")], 4, { half: true });
-    expect(hoopOf(1)).toEqual(hoopOf(0)); // one hoop for both
-    const [me, them] = g.players, hoop = hoopOf(0);
-    expect(g.ball.holder).toBe(me.i); // you check it first, behind the arc
-    expect(dist(me, hoop)).toBeGreaterThan(COURT.three);
-    // they rebound (a change of hands): they must take it back before they can shoot
-    them.x = hoop.x; them.y = hoop.y - 2;
+    const [me, them] = g.players;
+    expect(hoopOf(1)).not.toEqual(hoopOf(0)); // theirs is at your end of the court
+    expect(g.ball.holder).toBe(me.i); // you check it first, at the top of your key
+    expect(dist(me, hoopOf(0))).toBeGreaterThan(COURT.three);
+    // they steal it: play stops, then they check it at the top of their key (your end), you between them and the hoop
     giveBall(g, them.i);
-    expect(g.mustClear).toBe(1);
-    step(g, [NO_INPUT, hold({ shoot: true })], DT);
-    expect(g.events.some((e) => e.text === "TAKE IT BACK!")).toBe(true);
-    expect(them.act).toBe("free");
-    them.y = hoop.y - (COURT.three + 1); // out past the arc
-    step(g, [NO_INPUT, NO_INPUT], DT);
-    expect(g.mustClear).toBeNull();
-    // after a make, the other side checks it at the top
+    expect(g.events.some((e) => e.text === "CHECK IT UP")).toBe(true);
+    expect(g.dead).toBeGreaterThan(0);
+    for (let i = 0; i < 120 && g.dead > 0; i++) step(g, [NO_INPUT, NO_INPUT], DT);
+    expect(g.ball.holder).toBe(them.i);
+    const hoop = hoopOf(1);
+    expect(dist(them, hoop)).toBeGreaterThan(COURT.three);
+    expect(dist(me, hoop)).toBeLessThan(dist(them, hoop));
+    expect(them.y).toBeGreaterThan(me.y); // further up the screen than you
+  });
+
+  it("the shot clock: a full 24 on a change of hands, 14 when the shooting team gets its own miss back", () => {
+    const g = newGame([named("lucario")], [named("garchomp")], 4);
+    const [me, them] = g.players;
+    giveBall(g, me.i);
+    g.shotClock = 3;
+    g.clockReset = true; // a shot hit the rim
+    giveBall(g, me.i); // ...and you got it back
+    expect(g.shotClock).toBe(LIVE.reboundClock);
+    g.clockReset = true;
+    giveBall(g, them.i); // they got it
+    expect(g.shotClock).toBe(LIVE.shotClock);
+  });
+
+  it("weak shooters still make a fair share of good, open shots, and the order of who's better stays", () => {
+    const weak = makeChance("mid", liftRating(15), "good", 0), star = makeChance("mid", liftRating(95), "good", 0);
+    expect(weak).toBeGreaterThan(0.38);
+    expect(star).toBeGreaterThan(weak + 0.15);
+    expect(liftRating(99)).toBeCloseTo(99);
+  });
+
+  it("streetball: every check at the top says so (the view waits for you to check it up)", () => {
+    const g = newGame([named("lucario")], [named("garchomp")], 4, { half: true });
     g.dead = 0.001;
-    g.next = 0;
+    g.next = 1;
     step(g, [NO_INPUT, NO_INPUT], DT);
-    expect(g.ball.holder).toBe(me.i);
-    expect(dist(me, hoop)).toBeGreaterThan(COURT.three);
-    expect(g.mustClear).toBeNull();
-    newGame([named("lucario")], [named("garchomp")], 4); // a normal game puts the hoops back
-    expect(hoopOf(1)).not.toEqual(hoopOf(0));
+    expect(g.events.some((e) => e.kind === "check" && e.side === 1)).toBe(true);
+  });
+
+  it("half-court possession: the ball alternates after every shot until a side has 3, then a make keeps it", () => {
+    // let a shot by `by` come down, made or not, and say who gets the ball next
+    const after = (score: [number, number], by: 0 | 1, made: boolean) => {
+      const g = newGame([named("lucario")], [named("garchomp")], 4, { half: true });
+      const hoop = hoopOf(0);
+      g.score = [...score];
+      g.ball.holder = null;
+      g.ball.flight = {
+        kind: "shot", x0: hoop.x, y0: hoop.y - 5, z0: 2, x1: hoop.x, y1: hoop.y, z1: COURT.rimZ, peak: 4, t: 0.49, dur: 0.5, made,
+        points: 2, by, to: null, tested: [],
+      };
+      for (let i = 0; i < 5 && g.dead <= 0; i++) step(g, [NO_INPUT, NO_INPUT], DT);
+      const missed = g.events.some((e) => e.kind === "miss");
+      for (let i = 0; i < 120 && g.dead > 0; i++) step(g, [NO_INPUT, NO_INPUT], DT);
+      return { next: g.players[g.ball.holder ?? 0].side, missed, loose: g.ball.flight?.kind === "loose" };
+    };
+    expect(after([0, 0], 0, true).next).toBe(1); // under 3: a make gives it to them
+    expect(after([2, 0], 0, true).next).toBe(1); // (the make that gets you to 3 doesn't count yet)
+    expect(after([3, 0], 0, true).next).toBe(0); // 3 or more: make it, take it
+    expect(after([0, 4], 1, true).next).toBe(1); // the CPU too
+    const miss = after([5, 0], 0, false);
+    expect(miss.missed).toBe(true);
+    expect(miss.next).toBe(1); // any miss: theirs, checked at the top (no rebound)
+    expect(miss.loose).toBe(false);
+    // and a miss bounces off the rim, away from the hoop (straight down through it, it looked like a make)
+    const g = newGame([named("lucario")], [named("garchomp")], 4, { half: true });
+    const hoop = hoopOf(0);
+    g.ball.holder = null;
+    g.ball.flight = { kind: "shot", x0: hoop.x, y0: hoop.y - 5, z0: 2, x1: hoop.x, y1: hoop.y, z1: COURT.rimZ, peak: 4, t: 0.49, dur: 0.5, made: false, points: 2, by: 0, to: null, tested: [] };
+    for (let i = 0; i < 5 && g.dead <= 0; i++) step(g, [NO_INPUT, NO_INPUT], DT);
+    const f = g.ball.flight!;
+    expect(Math.hypot(f.x1 - hoop.x, f.y1 - hoop.y)).toBeGreaterThan(1.5);
+  });
+
+  it("running straight at a teammate who's standing still makes him plant a screen (no play on)", () => {
+    const team = (a: string, b: string, c: string) => [named(a), named(b), named(c)];
+    const g = newGame(team("lucario", "machamp", "eevee"), team("snorlax", "pikachu", "onix"), 5);
+    const [me, mate] = g.players, hoop = hoopOf(0);
+    for (const p of g.players.slice(2)) Object.assign(p, { x: 1, y: 2 }); // everyone else out of the way
+    Object.assign(me, { x: hoop.x, y: hoop.y - 12, vx: 0, vy: 5 });
+    Object.assign(mate, { x: hoop.x, y: hoop.y - 9, vx: 0, vy: 0 });
+    giveBall(g, me.i);
+    const brain = makeAi(mate.i, LIVE_AI.PRO);
+    let screened = false;
+    for (let i = 0; i < 20; i++) {
+      step(g, g.players.map((p) => (p === me ? hold({ y: 1 }) : p === mate ? brain(g, DT) : NO_INPUT)), DT);
+      if (mate.screening) screened = true;
+    }
+    expect(screened).toBe(true);
   });
 
   it("a CPU ball handler pinned in the corner doesn't just dribble there: it shoots or drives within a few seconds", () => {
@@ -914,15 +984,14 @@ describe("1v1 pacing, screens, floaters, eurosteps and special dunks", () => {
     return seen;
   }
 
-  it("half-court: the CPU holds a beat after taking it back, and after a check at the top", () => {
+  it("streetball: the CPU holds a beat after each check at the top", () => {
     const g = newGame([snorlax], [lucario], 2, { half: true });
-    const [me, cpu] = g.players, hoop = hoopOf(1);
+    const [me, cpu] = g.players;
     const ai = makeAi(cpu.i, LIVE_AI.PRO);
-    Object.assign(me, { x: 1, y: 1 }); // out of the way
-    Object.assign(cpu, { x: hoop.x, y: hoop.y - 2 });
-    giveBall(g, cpu.i); // a rebound: it has to take it back first
-    for (let i = 0; i < 600 && g.mustClear === 1; i++) step(g, [NO_INPUT, ai(g, DT)], DT);
-    expect(g.mustClear).toBeNull();
+    g.dead = 0.001; // it checks the ball at the top
+    g.next = 1;
+    step(g, [NO_INPUT, ai(g, DT)], DT);
+    Object.assign(me, { x: 1, y: COURT.l - 1 }); // out of the way
     const beat = () => {
       const start = g.time;
       let busy = false;
@@ -940,9 +1009,10 @@ describe("1v1 pacing, screens, floaters, eurosteps and special dunks", () => {
       expect(went).toBe(true);
     };
     beat();
-    g.dead = 0.001; // a make: it checks the ball at the top
+    g.dead = 0.001; // again, after a make
     g.next = 1;
     step(g, [NO_INPUT, ai(g, DT)], DT);
+    Object.assign(me, { x: 1, y: COURT.l - 1 });
     expect(g.ball.holder).toBe(cpu.i);
     beat();
   });

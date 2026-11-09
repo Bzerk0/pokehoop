@@ -138,11 +138,6 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
         return inp;
       }
       const d = dist(me, myHoop);
-      if (g.mustClear === side) {
-        // half-court, after a stop: take it back behind the arc before anything else
-        go(COURT.w / 2 + (me.x < COURT.w / 2 ? -1.5 : 1.5), myHoop.y + out * (COURT.three + 1.2), 0.3, 99);
-        return inp;
-      }
       // half-court: a beat after taking it back or a check (a stationary dribble) before going at you
       if (g.half && g.time - g.resetAt < LIVE.halfPause) {
         holdT = 0;
@@ -281,6 +276,21 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
 
     function offBall(): Input {
       jumpAt = null;
+      // the ball handler running straight at me while I stand still: plant a screen right here (then roll)
+      const hb = handlerOf(g);
+      if (screenFor < 0 && !play && hb && hb.side === side && hb !== me && Math.hypot(me.vx, me.vy) < 0.8) { // (plays have their own)
+        const dx = me.x - hb.x, dy = me.y - hb.y, d = Math.hypot(dx, dy), v = Math.hypot(hb.vx, hb.vy);
+        if (d > 1.2 && d < LIVE.screenAsk && v > 2 && (hb.vx * dx + hb.vy * dy) / (v * d) > 0.85) {
+          screenFor = hb.i;
+          planted = true;
+          screenUntil = g.time + LIVE.aiScreenHold;
+        }
+      }
+      if (screenFor >= 0 && planted) {
+        if (g.time <= screenUntil) return (inp.screen = true), inp;
+        cutUntil = g.time + 1.4; // done: roll to the rim
+        screenFor = -1;
+      }
       // running a play: go where it says (and set the screen if that's my job)
       const t = play && size > 1 ? playSpot() : null;
       if (t) {
@@ -355,10 +365,10 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
     function guard(m: Player, onBall: boolean, tight = false) {
       const sx = m === man ? seenX : m.x, sy = m === man ? seenY : m.y;
       const dd = Math.hypot(theirHoop.x - sx, theirHoop.y - sy) || 1;
-      // 1v1, unless AGGRESSIVE: no reaching while he can't score yet (backcourt; half court: taking it back or past the
-      // arc), and room while he can't shoot at all (half court keeps the arc contested once it's taken back)
+      // 1v1, unless AGGRESSIVE: no reaching while he can't score yet (backcourt; half court: out past the arc), and
+      // room while he can't shoot at all (half court keeps the arc contested: he can shoot from there)
       const calm = onBall && size === 1 && styleName !== "AGGRESSIVE" && farOut(g, m);
-      const sag = calm && (!g.half || g.mustClear === m.side);
+      const sag = calm && !g.half;
       const gap = sag ? Math.min(LIVE.pickupGap, dd * 0.7) : onBall ? Math.min(tight ? 0.9 : 1.3, dd * 0.5) : tight ? Math.min(1.2, dd * 0.2) : Math.min(3, dd * 0.3);
       const far = go(sx + ((theirHoop.x - sx) / dd) * gap, sy + ((theirHoop.y - sy) / dd) * gap, 0.2, 2.5);
       inp.turbo = far > 2.5 && me.turbo > 0.15;

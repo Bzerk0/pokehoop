@@ -81,6 +81,14 @@ const FRAME_POINTS: P3[] = [0, CAB_W].flatMap((x) => [
   { x, y: CP_LIP.y, z: CP_LIP.z },
 ]);
 
+/** The whole cabinet, top to floor (the portrait title shows all of it). */
+const WHOLE_POINTS: P3[] = [0, CAB_W].flatMap((x) => [
+  { x, y: TOP_Y, z: MARQUEE.z },
+  { x, y: TOP_Y, z: BACK_Z },
+  { x, y: FLOOR_Y, z: BODY_Z },
+  { x, y: FLOOR_Y, z: BACK_Z },
+]);
+
 /** Where a model point lands on the stage (y only) in the looking-at-it pose: the same rotateY, rotateX about the
  *  pivot, translate and perspective the browser applies. */
 function projectY(p: P3, lift: number, push: number, shift: number, stageH: number) {
@@ -95,11 +103,12 @@ function projectY(p: P3, lift: number, push: number, shift: number, stageH: numb
 
 /** How far back (push) and how far up (lift) to hold the cabinet so its top half fills a stage `stageH` tall.
  *  The model sits `shift` lower than its own coordinates (to line up with the flat screen). */
-function framing(stageH: number, shift: number) {
+function framing(stageH: number, shift: number, whole = false) {
+  const points = whole ? WHOLE_POINTS : FRAME_POINTS, fill = whole ? 0.88 : FILL;
   const centred = (push: number) => {
     let lift = 0, top = 0, bottom = 0;
     for (let i = 0; i < 8; i++) {
-      const ys = FRAME_POINTS.map((p) => projectY(p, lift, push, shift, stageH));
+      const ys = points.map((p) => projectY(p, lift, push, shift, stageH));
       top = Math.min(...ys);
       bottom = Math.max(...ys);
       lift += stageH / 2 - (top + bottom) / 2;
@@ -109,7 +118,7 @@ function framing(stageH: number, shift: number) {
   let near = -600, far = 6000; // binary search: farther away = smaller
   for (let i = 0; i < 40; i++) {
     const mid = (near + far) / 2;
-    if (centred(mid).span > stageH * FILL) near = mid;
+    if (centred(mid).span > stageH * fill) near = mid;
     else far = mid;
   }
   return { push: far, lift: centred(far).lift };
@@ -182,12 +191,15 @@ function SidePanel({ side }: { side: "left" | "right" }) {
  * front: square-on to the screen, which then lands exactly on the flat screen's spot (top screenTop).
  * Otherwise it sways and you can drag it.
  */
-export function Cabinet3D({ children, front, screenTop, stageH }: { children: ReactNode; front: boolean; screenTop: number; stageH: number }) {
+export function Cabinet3D({ children, front, screenTop, stageH, whole = false }: {
+  children: ReactNode; front: boolean; screenTop: number; stageH: number;
+  whole?: boolean; // frame the whole cabinet, not just its top half (portrait)
+}) {
   const rig = useRef<HTMLDivElement>(null);
   const st = useRef({ yaw: BASE_YAW, base: BASE_YAW, pitch: VIEW, phase: 0, dragging: false, moved: 0, vel: 0 }).current;
   const shift = screenTop - SCREEN_Y;
   const cam = useRef<Framing>(null!);
-  const framed = useMemo(() => framing(stageH, shift), [stageH, shift]);
+  const framed = useMemo(() => framing(stageH, shift, whole), [stageH, shift, whole]);
   cam.current = framed;
 
   useEffect(() => {

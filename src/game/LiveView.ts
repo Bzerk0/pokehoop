@@ -63,6 +63,8 @@ const SWITCH_FLASH = 1200;
 const ENDING = { react: 900, fall: 250, menu: 4200 };
 const SPRITE_PX = 30; // sprite pixels per metre in the world
 const FONT = '"Press Start 2P"';
+const ATTRACT_BUDGET_MS = 4; // the title's off-screen fast-forward: ms of work per frame
+const POSTER_MS = 2400; // how long a posterized defender's card stays up (real time)
 // the court's size, read again for each new game (the dev menu can change it)
 let W = COURT.w, L = COURT.l;
 
@@ -161,6 +163,8 @@ export class LiveView {
   private filler = { points: null as THREE.Points | null, base: new Float32Array(), phase: new Float32Array(), seat: new Float32Array() };
   private hype = 0;
   private holdFromStart = false; // K/Space still held from the press that tipped off
+  private checkWait: { side: number; at: number } | null = null;
+  private poster: { who: number; by: number; at: number; from: { x: number; y: number } } | null = null; // posterized! // streetball: waiting for you to check it up
   private staminaUntil = 0; // show the stamina bar until then (ms)
   private crowd: number;
   // replays (replay.ts): the recording, the big-play spotter, clips still being filmed, one waiting to be shown, the
@@ -367,9 +371,10 @@ export class LiveView {
           if (keep(x, y)) dot(x, y);
         }
       };
-      // painted keys: yours at your end, theirs at the end you attack (every line scales with the court)
+      // painted keys: yours at your end, theirs at the end you attack (every line scales with the court); streetball
+      // plays each side's possessions at its own end, so both keys get the same paint: it reads as one half court
       const { keyW, keyL, circle, three, corner: side3 } = COURT;
-      px(fx(W / 2 - keyW / 2), fy(keyL), this.d.youColor, keyW * R, keyL * R);
+      px(fx(W / 2 - keyW / 2), fy(keyL), this.d.half && this.d.size === 1 ? this.d.cpuColor : this.d.youColor, keyW * R, keyL * R);
       px(fx(W / 2 - keyW / 2), fy(L), this.d.cpuColor, keyW * R, keyL * R);
       // lines: boundary (2 px), half court, centre circle, keys, free-throw circles, threes
       px(fx(0) - 2, fy(L) - 2, "white", W * R + 4, 2);
@@ -810,7 +815,16 @@ export class LiveView {
         passTo: digit != null && digit <= this.g.size ? digit - 1 : null,
         screen: this.act("left") && this.act("right"), // hold left and right together: plant a screen
       };
-      this.acc += dt * (this.menu ? LIVE.menuSlow : 1) * (this.cine ? replaySpeed(this.cine.clip, this.g.time) : 1); // slower in the menu, and at a live slam
+      if (this.checkWait) {
+        // streetball: the game waits at the top of the key until you check it up (shoot or pass)
+        if (!this.holdFromStart && (this.tap("shoot") || this.tap("pass"))) {
+          this.checkWait = null;
+          this.holdFromStart = true; // that press isn't a shot
+          blip(880, 60, 0.05);
+        } else this.acc = 0;
+      }
+      // slower in the menu, and at a live slam; stopped while waiting for the check
+      if (!this.checkWait) this.acc += dt * (this.menu ? LIVE.menuSlow : 1) * (this.cine ? replaySpeed(this.cine.clip, this.g.time) : 1);
       let first = true;
       const frameEvents: GameEvent[] = this.extraEvents.splice(0); // anything from between steps (a menu call)
       // in the tutorial the CPU stands still (and has no coach) except in the defence step
@@ -963,7 +977,8 @@ export class LiveView {
           else this.popups.push({ text, color: "red", until: now + 1000, who: this.lastShooter, big: false });
         }
         this.specialDunk = false;
-        if (e.text === "AIR BALL!") this.popups.push({ text: e.text, color: "cloud", until: now + 900, big: true });
+        // (streetball: every miss says so: it's the end of the possession, and the ball goes the other way)
+        if (e.text === "AIR BALL!" || this.g.half) this.popups.push({ text: e.text, color: "cloud", until: now + 900, big: true });
         break;
       case "block":
         sting(jingle.block());
@@ -1027,6 +1042,10 @@ export class LiveView {
       case "period":
         if (e.text === "BUZZER") blip(98, 500, 0.08);
         else this.popups.push({ text: e.text, color: "white", until: now + 2000, big: true });
+        break;
+      case "check":
+        // streetball 1v1: a check at the top; hold the game till you check it up
+        if (this.g.half && this.g.size === 1 && !this.d.attract) this.checkWait = { side: e.side, at: now };
         break;
       case "sub":
         blip(523, 30, 0.03);
@@ -1092,7 +1111,7 @@ export class LiveView {
           lift = (body.scale.x / 2) * Math.abs(Math.sin(mat.rotation));
         }
       }
-      const [bsx, bsy] = this.baseScale[i] ?? [body.scale.x, body.scale.y];
+      const [bsx, bsy] = (this.baseScale[i] ?? [body.scale.x, body.scale.y]).map((v) => v * LIVE.spriteScale);
       body.scale.set(bsx, bsy, 1);
       if (this.cinematic) lift += this.replayPose(i, pl, body, mat);
       // fallen players draw on a layer above the court, so nothing of them disappears into the floor
@@ -1100,6 +1119,7 @@ export class LiveView {
       mat.depthTest = !fallen;
       body.renderOrder = fallen ? 10 : 0;
       body.position.copy(at(pl.x, pl.y, pl.z + 0.01 + hop + lift));
+      body.visible = !(this.poster?.who === i && now - this.poster.at < POSTER_MS); // (he's a card now)
       this.fadeIfInTheWay(i, body, mat);
       const tint = (body.material as THREE.SpriteMaterial).color;
       if (i === this.whiteWho && now < this.whiteUntil) tint.setScalar(8); // way past white: a white silhouette
@@ -1212,7 +1232,9 @@ export class LiveView {
    *  then show it. When a game ends, a new one tips off. */
   private attractSearch() {
     let g = this.g;
-    for (let k = 0; k < 300 && !this.replay; k++) {
+    // a few milliseconds of fast-forward a frame, no more: a whole search in one frame took 40–130 ms (the title lagged)
+    const until = performance.now() + ATTRACT_BUDGET_MS;
+    for (let k = 0; k < 300 && !this.replay && performance.now() < until; k++) {
       if (g.over) {
         g = this.g = lineupGame(this.d.home, this.d.away, this.d.dex, this.d.size, (this.d.seed = (this.d.seed * 31 + 7) >>> 0));
         this.rec = new Recorder(6);
@@ -1313,6 +1335,7 @@ export class LiveView {
     else if ((c.kind === "block" || c.kind === "chase") && last) say(c.kind === "chase" ? ["CHASE-DOWN!", "FROM BEHIND!"] : ["REJECTED!", "DENIED!", "NOT IN HERE!"]);
     else if (c.kind === "perimeter" && last) say(["SWING, SWING... BANG!"]);
     else if (c.kind === "shot" && last) say(["AT THE BUZZER!", "GAME!", "ICE COLD!"]);
+    if ((c.kind === "dunk" || c.kind === "special") && c.frames.length) this.posterize(s.players, c.who, now);
     if (c.kind === "dunk" || c.kind === "special") {
       const end = c.side === 0 ? 1 : 0;
       sfx(boom);
@@ -1364,6 +1387,7 @@ export class LiveView {
         if (e.kind === "make" && e.who === c.clip.who) {
           if (c.clip.kind === "eurostep" || c.clip.kind === "floater") blip(1320, 70, 0.05); // the swish (not another plant)
           else this.replayImpact(c.clip, c.clip.keys.length - 1, now);
+          if (c.clip.kind === "dunk" || c.clip.kind === "special") this.posterize(g.players, c.clip.who, now);
           const side = c.clip.side;
           if (c.clip.kind === "dunk") this.shout(["SLAM!", "BOOM!", "JAM!", "POSTERIZED!", "HAMMER TIME!"], side, now);
           if (c.clip.kind === "stepback") this.shout(["SPLASH!", "CASH!", "BANG!"], side, now); // the corner three
@@ -1379,7 +1403,8 @@ export class LiveView {
       const slam = c.clip.kind === "dunk" || c.clip.kind === "special";
       const landed = slam && !this.cineBlocked && star.act !== "dunk" && star.z === 0 && g.time > c.clip.keys[0];
       // after the landing, hold the shot a beat (the hang, the crowd), then cut back
-      if (landed) c.clip.end = Math.min(c.clip.end, (c.landedAt ??= g.time) + LIVE.cineHold);
+      const card = this.poster && now - this.poster.at < POSTER_MS ? LIVE.posterHold : 0; // (longer for a poster)
+      if (landed) c.clip.end = (c.landedAt ??= g.time) + LIVE.cineHold + card;
       if (g.time > c.clip.end || g.over) this.endCine();
     }
     // an alley-oop: the pass plays out in the normal view; the cut waits for the catch
@@ -1515,6 +1540,7 @@ export class LiveView {
     c.fillRect(0, 0, VIEW_W, 28);
     c.fillRect(0, VIEW_H - 28, VIEW_W, 28);
     if (this.cineCaption) this.drawCaption(this.cineCaption, now, VIEW_H - 28 - 14);
+    this.drawPoster(now);
   }
 
   /** A big caption that slams in and settles, with a hard shadow, its bottom at `bottom`. */
@@ -1564,7 +1590,7 @@ export class LiveView {
 
   /** The star stretches in the air and leans into a slam; a broken-ankled defender goes down. Returns any lift. */
   private replayPose(i: number, pl: Player, body: THREE.Sprite, mat: THREE.SpriteMaterial) {
-    const r = this.filming!, c = r.clip, [sx, sy] = this.baseScale[i];
+    const r = this.filming!, c = r.clip, [sx, sy] = this.baseScale[i].map((v) => v * LIVE.spriteScale);
     if (i === c.who) {
       if (pl.z > 0.25) body.scale.set(sx * 0.88, sy * 1.14, 1);
       const slam = c.kind === "dunk" || c.kind === "special";
@@ -1704,6 +1730,65 @@ export class LiveView {
     text(`${star}${vs ? ` ON ${vs}` : ""} - ${g.names[clip.side].toUpperCase()}`, x, VIEW_H - BAR + 8, "white");
     text("ANY KEY: SKIP", VIEW_W - 14, VIEW_H - BAR + 20, "steel", 8, "right");
     if (this.cineCaption && now - this.cineCaption.at < 1400) this.drawCaption(this.cineCaption, now, 64);
+    this.drawPoster(now);
+  }
+
+  /** A slam over a defender close by (LIVE.posterRange): he's posterized, turned into a trading card. */
+  private posterize(players: { x: number; y: number; side: number }[], by: number, now: number) {
+    const star = players[by];
+    let who = -1, best = LIVE.posterRange;
+    players.forEach((q, i) => {
+      const d = Math.hypot(q.x - star.x, q.y - star.y);
+      if (q.side !== star.side && d < best) (who = i), (best = d);
+    });
+    if (who < 0) return;
+    const q = this.g.players[who];
+    this.poster = { who, by, at: now, from: this.toScreen(q.x, q.y, q.z + 1) };
+    this.cineCaption = null; // the card says it
+    if (!this.d.attract) [196, 147, 98].forEach((f, k) => setTimeout(() => blip(f, 120, 0.09), k * 110));
+  }
+
+  /** The posterized card: it flies out of the defender to the middle of the screen in pixel steps, holds, and drops. */
+  private drawPoster(now: number) {
+    const p = this.poster;
+    if (!p) return;
+    const t = now - p.at;
+    if (t >= POSTER_MS) return void (this.poster = null);
+    const c = this.hud, pl = this.g.players[p.who];
+    const grow = Math.min(1, Math.floor((t / 260) * 6) / 6), drop = Math.max(0, (t - (POSTER_MS - 300)) / 300);
+    const W2 = 132, H2 = 184, w = Math.round(24 + (W2 - 24) * grow), h = Math.round(34 + (H2 - 34) * grow);
+    const cx = Math.round(p.from.x + (VIEW_W / 2 - p.from.x) * grow), cy = Math.round(p.from.y + (VIEW_H / 2 - p.from.y) * grow + drop * 260);
+    const x = cx - Math.round(w / 2), y = cy - Math.round(h / 2);
+    const rect = (rx: number, ry: number, rw: number, rh: number, n: PaletteName) => ((c.fillStyle = PALETTE[n]), c.fillRect(rx, ry, rw, rh));
+    rect(x - 2, y - 2, w + 4, h + 4, "black");
+    rect(x, y, w, h, "gold");
+    rect(x + 4, y + 4, w - 8, h - 8, "cream");
+    if (grow < 1) return; // the words and the art once it's landed
+    const tc = typeColor(pl.p.types[0]);
+    c.font = `8px ${FONT}`;
+    c.textBaseline = "top";
+    c.textAlign = "left";
+    c.fillStyle = PALETTE.black;
+    c.fillText(pl.p.name.toUpperCase().slice(0, 12), x + 8, y + 9);
+    // the art window, in his type's colour, with his sprite as big as fits (whole-number scale)
+    const ax = x + 8, ay = y + 22, aw = w - 16, ah = 92;
+    rect(ax - 2, ay - 2, aw + 4, ah + 4, "black");
+    c.fillStyle = tc;
+    c.fillRect(ax, ay, aw, ah);
+    const img = ((this.bodies[p.who].material as THREE.SpriteMaterial).map?.image ?? null) as CanvasImageSource & { width: number; height: number } | null;
+    if (img && img.width) {
+      const k = Math.max(1, Math.floor(Math.min(aw / img.width, ah / img.height)));
+      c.imageSmoothingEnabled = false;
+      c.drawImage(img, Math.round(ax + (aw - img.width * k) / 2), Math.round(ay + (ah - img.height * k) / 2), img.width * k, img.height * k);
+    }
+    // the bottom: what happened, and who did it
+    rect(x + 8, y + 122, w - 16, 22, "red");
+    c.textAlign = "center";
+    c.fillStyle = PALETTE.white;
+    c.fillText("POSTERIZED!", cx, y + 129);
+    c.fillStyle = PALETTE.black;
+    c.fillText(`BY ${this.g.players[p.by].p.name.toUpperCase().slice(0, 9)}`, cx, y + 154);
+    c.fillText(`OVR ${Math.round(pl.p.ovr[pl.p.best])}`, cx, y + 168);
   }
 
   /** Behind your end, looking up the court at the hoop you attack, sliding along with the ball, but never so far
@@ -1896,12 +1981,22 @@ export class LiveView {
     }
 
     if (!this.started) this.drawIntro(rect, text);
+    else if (this.checkWait && !this.ended) this.drawCheckUp(text, now);
     else if (!this.ended) {
       if (!this.touch) this.drawControls(rect, text); // (on a phone the buttons are on screen)
       if (this.tutor) this.drawLesson(rect, text);
       if (this.menu) this.drawMenu(rect, text);
       else if (g.solo && performance.now() < this.sideUntil && g.poss === 0) this.drawSidePlays(rect, text);
     }
+  }
+
+  /** Streetball: CHECK UP! slams in big, with the key to press under it (yours to start, or to hand it to them). */
+  private drawCheckUp(text: (s: string, x: number, y: number, n: PaletteName, size?: number, align?: CanvasTextAlign, shadow?: boolean) => void, now: number) {
+    const since = now - this.checkWait!.at, size = since < 140 ? 32 : 24, cx = VIEW_W / 2;
+    text("CHECK UP!", cx, 120, this.checkWait!.side === 0 ? "gold" : "red", size, "center", true);
+    const key = this.touch ? "TAP SHOOT" : `PRESS ${keyName(this.keys.shoot)}`;
+    const what = this.checkWait!.side === 0 ? "TO CHECK IT UP" : "TO CHECK IT TO THEM";
+    if (Math.floor(now / 450) % 2 === 0) text(`${key} ${what}`, cx, 160, "white", 8, "center", true);
   }
 
   /** HOW TO PLAY: the current step in a box under the score: what to do, and a hint if it's taking a while. */
@@ -2036,7 +2131,7 @@ export class LiveView {
     }
     const sub = this.tutor
       ? `${STEPS.length} QUICK STEPS - YOU ATTACK THE FAR HOOP`
-      : g.timed ? "4 QUARTERS OF 1:30 - YOU ATTACK THE FAR HOOP" : g.half ? `HALF COURT - FIRST TO ${g.target} - TAKE IT BACK AFTER A STOP` : `FIRST TO ${g.target} - YOU ATTACK THE FAR HOOP`;
+      : g.timed ? "4 QUARTERS OF 1:30 - YOU ATTACK THE FAR HOOP" : g.half ? `STREETBALL - FIRST TO ${g.target} - CHECK IT UP AFTER EVERY SHOT` : `FIRST TO ${g.target} - YOU ATTACK THE FAR HOOP`;
     // the format on a red ribbon
     const rw = sub.length * 8 + 24;
     rect(cx - rw / 2, 86, rw, 16, "red");

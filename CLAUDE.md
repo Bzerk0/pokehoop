@@ -81,13 +81,35 @@
 - CPU play styles (`AI_STYLES` in ratingConfig, `styleOf` in ai.ts from ratings: BALANCED, AGGRESSIVE, PASS FIRST,
   BALL HOG, SHARPSHOOTER) scale pull-ups, passing, drives, threes and steals; `patience` is how long a stuck handler
   holds it before forcing a shot or a drive at the rim (the fix for dribbling in the corner; pinned on a sideline it
-  cuts back to the middle). HALF 1V1 (Play page, test): `GameOptions.half` / `g.half` makes `hoopOf` give both sides
-  the far hoop (`courtwards` for directions); a change of hands sets `g.mustClear` (take it back behind the arc:
-  shooting before then says TAKE IT BACK!); after a make or violation `checkBall` puts the ball at the top of the key.
-  The CPU handler waits `LIVE.halfPause` after taking it back or a check. 1v1 pressure: non-AGGRESSIVE CPU defenders
+  cuts back to the middle). HALF 1V1 / STREETBALL (Play page, test): `GameOptions.half` / `g.half`.
+  Each side plays its possessions at its own hoop (yours far, the CPU's at your end, so defence looks like normal
+  defence; the user's call over a turned-round camera), and LiveView paints both keys the CPU's colour so it reads as
+  one half court. Every possession starts with `checkBall` at the top of that side's key; a live change of hands (a
+  steal) stops play for a CHECK IT UP (`gain`, `checking` flag). The CPU handler waits `LIVE.halfPause` after a check.
+  1v1 pressure: non-AGGRESSIVE CPU defenders
   pick up loose and don't reach until the handler crosses half court (half court: inside the arc); no CPU steal for
   `stealGrace` after you get it; a whiffed steal out in your backcourt stumbles `pressWhiff` × longer (aggressive
-  pressing is punishable).
+  pressing is punishable). Streetball possession (half-court): every miss is dead (no rebound, `halfMiss`) and the
+  other side checks it; a make gives it to the other side too, unless the scorer already had `LIVE.halfKeepAt` (3)
+  points before it (make it, take it).
+- Streetball check-up: `checkBall` emits a "check" event; LiveView (1v1 half only) stops the game (`checkWait`) with a
+  big CHECK UP! and a prompt until you press shoot or pass. Shooting: live shooting/finishing ratings go through
+  `liftRating` (LIVE.shotFloor: 0 counts as 35, 99 stays 99) so weak shooters aren't hopeless (5v5 CPU games ~59% made,
+  ~75 points). Shot clock: 24 on a change of hands, `reboundClock` (14) when the shooting team gets its own miss back.
+  `LIVE.spriteScale` sizes the court sprites (dev menu GAME). Posterize: a slam with a defender within
+  `posterRange` (live cut or replay) turns him into a trading card (`posterize`/`drawPoster`, POSTER_MS; his sprite
+  hides meanwhile; the live cut holds `posterHold` longer). SIM THE REST plays the TipOff playback first. PRE-GAME from
+  a game returns to the same team, difficulty, opponent and character select (ArcadeSetup `back`, PlayPage navState).
+  Title lag fix: the attract fast-forward runs at most ATTRACT_BUDGET_MS (4 ms) a frame (a whole search was 40–130 ms).
+- Phone portrait title (`usePortraitTouch`): the whole cabinet (Cabinet3D `whole` framing, PixelStage `exact` fit),
+  then it faces you and stays 3D (marquee and control panel above and below the screen), then a full-screen menu
+  (four stacked buttons, the clips stretched to cover behind them). Turn-sideways screens have a BACK button; on
+  iPhone the pause menu's HIDE ADDRESS BAR brings the scroll-to-start screen back (`useScrollToStart` returns
+  [waiting, again]).
+- Screens on the run: with no play on, the ball handler running straight at a teammate standing still (within
+  `LIVE.screenAsk`) makes him plant a screen there (ai.ts offBall), then roll. Court length: `LIVE.midCut` metres are
+  taken out of the middle (COURT.l); hoops, arcs and spots are measured from the baselines, so only the running
+  between ends shrinks (5v5 CPU games went ~65 → ~75 points, turnovers ~11% → 7%).
 - Screens: any player planting with `Input.screen` stops; the CPU sets screens outside plays too (`aiScreenRate`,
   `aiScreenHold`: the teammate nearest the handler plants beside him toward the hoop, then rolls) and handlers drive off
   them. Floater: a quick tap while driving (`driveSpeed`) between `layupRange` and `floaterRange` (high soft arc,

@@ -12,10 +12,13 @@ export function PixelStage({
   children,
   width = STAGE_W,
   minHeight = STAGE_H,
+  exact = false,
 }: {
   children: ReactNode | ((height: number) => ReactNode);
   width?: number;
   minHeight?: number;
+  /** Scale to fit exactly (not a whole number): the portrait title's 3D cabinet, which perspective scales anyway. */
+  exact?: boolean;
 }) {
   const outer = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState({ k: 1, dpr: 1, height: minHeight, left: 0, top: 0 });
@@ -26,7 +29,7 @@ export function PixelStage({
     const measure = () => {
       const dpr = window.devicePixelRatio || 1;
       const w = el.clientWidth * dpr, h = el.clientHeight * dpr; // in real screen pixels
-      const k = Math.max(1, Math.floor(Math.min(w / width, h / minHeight)));
+      const fitK = Math.min(w / width, h / minHeight), k = exact ? fitK : Math.max(1, Math.floor(fitK));
       const height = Math.max(minHeight, Math.floor(h / k));
       // whole-pixel offsets keep every art pixel on the screen's pixel grid
       setFit({ k, dpr, height, left: Math.round((w - width * k) / 2) / dpr, top: Math.max(0, Math.round((h - height * k) / 2)) / dpr });
@@ -39,7 +42,7 @@ export function PixelStage({
       ro.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [width, minHeight]);
+  }, [width, minHeight, exact]);
 
   return (
     <div ref={outer} className="relative h-full w-full overflow-hidden bg-black">

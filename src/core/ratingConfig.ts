@@ -155,9 +155,13 @@ export const LIVE = {
   // the court's size × a real one (28.65 × 15.24 m): lines, three-point arc and where players stand all scale with
   // it; the players don't, so a bigger court means more room. Trying 15% bigger (the user's test); 1 = real size
   courtScale: 1.15,
+  midCut: 5, // metres taken out of the middle of the court's length (less running between the ends; the halves stay as
+  // they were: hoops, arcs and spots are measured from the baselines)
   targetScore: 11, // first to this wins (1v1)
   targetBySize: { 1: 11, 3: 15, 5: 21 } as Record<number, number>, // first to this, by players a side
-  shotClock: 24, // seconds (the user's call; PLAN.md said 14); resets when the ball changes hands or a shot hits the rim
+  shotClock: 24, // seconds (the user's call; PLAN.md said 14); resets when the ball changes hands
+  reboundClock: 14, // seconds on the shot clock when the shooting team gets its own miss back (off the rim)
+  spriteScale: 1, // × the Pokémon sprites' size on the court (the dev menu: bigger reads better, smaller shows more court)
   // gameplay aids
   quickTap: 0.12, // let go of K this fast: a quick shot, no meter
   quickClose: 0.15, // a quick shot's make chance gained right at the rim, fading out by quickCloseTo metres
@@ -187,6 +191,8 @@ export const LIVE = {
   liveCine: 1, // 1 = live cinematic cuts (dunks, alley-oops, blocks, corner threes), 0 = off
   cineGap: 2, // game seconds after one live cut before the next can start
   cineHold: 0.5, // seconds a live dunk cut stays on after the dunker lands
+  posterRange: 1.6, // metres: a dunk over a defender this close posterizes him (he turns into a trading card)
+  posterHold: 1.2, // extra game seconds a live dunk cut stays on for the card
   oopCut: 0.35, // seconds before the catch an alley-oop's live cut starts (the lob itself stays in the normal view)
   cornerEase: 1.4, // seconds a corner three's live cut takes to speed up from full slow-mo to normal
   /** Which live cuts play (1 = on, 0 = off), each on its own (the dev menu's LIVE CINE SHOTS). */
@@ -248,6 +254,8 @@ export const LIVE = {
   threeAt: 6.75,
   timing: { perfect: 0.3, good: 0.12, miss: -0.25 }, // added to the base make chance (SIM rim/mid/three)
   ratingSlope: 0.004, // make chance per rating point above 60
+  shotFloor: 35, // shooting/finishing ratings are lifted toward the middle in live games: 0 counts as this, 99 stays 99
+  // (low-rated Pokémon still make a fair share of good, open shots; the order of who's better doesn't change)
   contestPenalty: 0.22, // make chance lost to a full contest
   dunkRange: 2.4, // turbo + K this close goes to the rim
   dunkTime: 0.45,
@@ -282,13 +290,16 @@ export const LIVE = {
   ankles: 0.4, // seconds a beaten defender stumbles
   anklesChance: 0.35, // plus 0.005 per point of Handles over Perimeter D
   // 1v1: a beat for you to set up, and no smothering at the start of a possession
+  halfKeepAt: 3, // half-court: a side with this many points keeps the ball after it scores (make it, take it); below it,
+  // and after any miss, the ball goes to the other side (a check at the top)
   halfPause: 0.7, // half-court: seconds the CPU ball handler holds (a stationary dribble) after taking it back or a check
   pickupGap: 3, // metres most CPU defenders sit off a handler still in his backcourt (half court: taking it back)
   pressWhiff: 2.2, // × the stumble for a missed steal out in the handler's backcourt (half court: past the arc)
   stealGrace: 0.8, // seconds after getting the ball before a CPU defender tries a steal
   // CPU screens outside called plays: the teammate nearest the ball comes up beside it, plants, then rolls to the rim
   aiScreenRate: 0.15, // tries per second (for the teammate nearest the ball)
-  aiScreenHold: 1.5, // seconds it stays planted
+  aiScreenHold: 1.5,
+  screenAsk: 4.5, // metres: the ball handler running straight at a teammate standing still makes him set a screen // seconds it stays planted
   // floaters and eurosteps: moving toward the hoop faster than driveSpeed counts as driving
   driveSpeed: 2, // m/s toward the hoop
   floaterRange: 4.6, // a quick tap while driving, between layupRange and this from the rim, is a floater

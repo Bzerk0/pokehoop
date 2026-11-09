@@ -147,8 +147,12 @@ export const DEV_GROUPS: DevGroups = [
   {
     title: "GAME",
     items: [
+      ["spriteScale", "× the Pokémon sprites' size (live)"],
       ["shotClock", "seconds on the shot clock"],
+      ["reboundClock", "shot clock after your own miss comes back"],
+      ["shotFloor", "weakest shooter counts as this rating"],
       ["courtScale", "× a real court's size (applies on RESTART)"],
+      ["midCut", "metres cut from mid court (applies on RESTART)"],
       ["drain", "energy lost per second on court"],
       ["sprintDrain", "× energy lost while sprinting"],
       ["recover", "energy back per second on the bench"],

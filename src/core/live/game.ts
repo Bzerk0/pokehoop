@@ -13,7 +13,7 @@ import { ovrOf, PLAY, type PlayName, type SchemeName } from "./plays.ts";
 // (getters, so the dev menu can change the size; a new game picks it up)
 export const COURT = {
   get w() { return 15.24 * LIVE.courtScale; },
-  get l() { return 28.65 * LIVE.courtScale; },
+  get l() { return 28.65 * LIVE.courtScale - LIVE.midCut; }, // (a shorter middle: LIVE.midCut)
   rimZ: 3.05,
   get hoopIn() { return 1.575 * LIVE.courtScale; },
   get three() { return 6.75 * LIVE.courtScale; }, // the three-point arc
@@ -25,9 +25,9 @@ export const COURT = {
 };
 export type Side = 0 | 1;
 export const other = (s: Side): Side => (s === 0 ? 1 : 0);
-/** The hoop a side attacks: you (0) go up to the top one, the CPU (1) comes down to the bottom one. */
-let halfCourt = false; // the game being played is half-court: both sides attack the far hoop (set by newGame and step)
-export const hoopOf = (side: Side) => ({ x: COURT.w / 2, y: side === 0 || halfCourt ? COURT.l - COURT.hoopIn : COURT.hoopIn });
+/** The hoop a side attacks: you (0) go up to the top one, the CPU (1) comes down to the bottom one (streetball too:
+ *  each side's possessions are played at its own hoop, painted alike so it reads as one half court). */
+export const hoopOf = (side: Side) => ({ x: COURT.w / 2, y: side === 0 ? COURT.l - COURT.hoopIn : COURT.hoopIn });
 /** From a side's hoop out toward the court, along y: -1 for the far hoop, 1 for the near one. */
 export const courtwards = (side: Side) => (hoopOf(side).y > COURT.l / 2 ? -1 : 1);
 
@@ -99,7 +99,7 @@ export type Ball = { holder: number | null; x: number; y: number; z: number; fli
 
 export type EventKind =
   | "release" | "make" | "miss" | "block" | "steal" | "rebound" | "ankles" | "whiff" | "over" | "pass" | "violation"
-  | "screen" | "call" | "period" | "sub" | "fire" | "move";
+  | "screen" | "call" | "period" | "sub" | "fire" | "move" | "check";
 /** A moment for the results screen's highlights (same shape as the sim's). */
 export type Highlight = { period: number; text: string; weight: number; kind: string };
 export type GameEvent = { kind: EventKind; side: Side; text: string; who?: number; vs?: number }; // who: the player it's about; vs: the other one in it
@@ -122,7 +122,6 @@ export type Game = {
   clockReset: boolean; // the shot hit the rim: the next team to touch it gets a fresh clock
   control: number; // the side-0 player you're steering
   half: boolean; // half-court: both sides attack the far hoop
-  mustClear: Side | null; // half-court: this side has to take the ball back behind the arc before it can shoot
   solo: boolean; // one-character mode: you only ever steer `control` (no switching on a pass or on defence)
   calls: [Call, Call]; // each team's play and scheme
   practice: boolean; // the tutorial: no shot clock, nobody wins
@@ -175,6 +174,10 @@ export const timingOf = (meter: number, window: number): Timing => {
 };
 
 /** The make chance: the sim's base rate for the zone, moved by the rating, the release timing and the contest. */
+/** A shooting/finishing rating as the live game uses it: lifted toward the middle (LIVE.shotFloor), so a weak shooter
+ *  still makes a fair share of good shots. */
+export const liftRating = (r: number) => LIVE.shotFloor + (r * (99 - LIVE.shotFloor)) / 99;
+
 export function makeChance(zone: Zone, rating: number, timing: Timing, contest: number) {
   const base = zone === "rim" ? SIM.rim : zone === "mid" ? SIM.mid : SIM.three;
   return clamp(base + (rating - 60) * LIVE.ratingSlope + LIVE.timing[timing] - contest * LIVE.contestPenalty, 0.02, 0.97);
@@ -272,12 +275,11 @@ export function newGame(you: RatedPokemon[], cpu: RatedPokemon[], seed: number, 
     ...court.map((p, k) => ({ p, slot: slots?.[k] ?? k, energy: 100, line: newLine(p.id, slots?.[k] ?? k) })),
     ...bench.map(({ p, slot }) => ({ p, slot, energy: 100, line: newLine(p.id, slot) })),
   ];
-  halfCourt = !!o.half;
   const g: Game = {
     size, players, ball: { holder: 0, x: COURT.w / 2, y: 3 * k, z: 0, flight: null }, score: [0, 0],
     target: o.timed || o.practice ? Infinity : LIVE.targetBySize[size] ?? LIVE.targetScore, rng: makeRng(seed), time: 0, dead: 0,
     practice: !!o.practice,
-    next: 0, poss: 0, shotClock: LIVE.shotClock, clockReset: false, control: 0, half: !!o.half, mustClear: null, solo: false, over: false, winner: null, events: [],
+    next: 0, poss: 0, shotClock: LIVE.shotClock, clockReset: false, control: 0, half: !!o.half, solo: false, over: false, winner: null, events: [],
     lastShot: null, calls: [0, 1].map(() => ({ play: null, playAt: 0, key: null, scheme: "MAN" as SchemeName })) as [Call, Call],
     timed: !!o.timed, period: 0, clock: SIM.quarterSec, inBreak: false, periods: [[0], [0]],
     rosters: [roster(you, o.youSlots, o.youBench), roster(cpu, o.cpuSlots, o.cpuBench)], autoSub: [true, true],
@@ -470,7 +472,6 @@ export const playTime = (g: Game, side: Side) => (g.calls[side].play ? g.time - 
 // ── one step ──────────────────────────────────────────────────────────────────
 /** Move the game on by dt seconds. inputs[i] is what player i asks for (the view gives yours to g.control). */
 export function step(g: Game, inputs: Input[], dt: number) {
-  halfCourt = g.half;
   g.events = [];
   if (g.over) return;
   g.time += dt;
@@ -599,14 +600,8 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
       break;
     case "free": {
       const target = inp.passTo != null ? g.players[inp.passTo] : null;
-      if (hasBall && g.mustClear === pl.side && dist(pl, hoopOf(pl.side)) >= COURT.three + 0.2) {
-        g.mustClear = null; // taken back
-        g.resetAt = g.time;
-      }
       if (inp.screen && !hasBall) want = 0; // setting a screen: plant your feet
-      if (hasBall && pressed && g.mustClear === pl.side) {
-        emit(g, "move", pl.side, "TAKE IT BACK!", pl.i); // half-court: past the arc first
-      } else if (hasBall && pressed) {
+      if (hasBall && pressed) {
         if (inp.turbo && dist(pl, hoopOf(pl.side)) < LIVE.dunkRange) return startDunk(g, pl);
         pl.act = "wind";
         pl.wind = 0;
@@ -803,9 +798,8 @@ export const quickChance = (zone: Zone, rating: number, contest: number, d: numb
 
 /** In your own half: on the far side of half court from the hoop you attack. */
 const backcourt = (pl: Player) => (hoopOf(pl.side).y > COURT.l / 2 ? pl.y < COURT.l / 2 : pl.y > COURT.l / 2);
-/** Still far from scoring: in its own half (full court), or taking it back / out past the arc (half court). */
-export const farOut = (g: Game, pl: Player) =>
-  g.half ? g.mustClear === pl.side || dist(pl, hoopOf(pl.side)) > COURT.three + 0.2 : backcourt(pl);
+/** Still far from scoring: in its own half (full court), or out past the arc (half court). */
+export const farOut = (g: Game, pl: Player) => (g.half ? dist(pl, hoopOf(pl.side)) > COURT.three + 0.2 : backcourt(pl));
 /** How fast a player is heading at the hoop it attacks (m/s; negative: away from it). */
 export function towardHoop(pl: Player) {
   const hoop = hoopOf(pl.side), d = dist(pl, hoop) || 1;
@@ -816,7 +810,7 @@ export function towardHoop(pl: Player) {
  *  move a few metres out: a floater, lofted high over the big (Finishing and Shooting; a contest counts half). */
 function layup(g: Game, pl: Player, hoop: { x: number; y: number }, floater = false) {
   const contest = contestOn(g, pl) * (floater ? 0.5 : 1);
-  const rating = (floater ? (a(pl).finishing + a(pl).shooting) / 2 : a(pl).finishing) * fresh(g, pl);
+  const rating = liftRating((floater ? (a(pl).finishing + a(pl).shooting) / 2 : a(pl).finishing) * fresh(g, pl));
   const chance = clamp(makeChance(floater ? "mid" : "rim", rating, "good", contest) + (floater ? LIVE.floaterBonus : LIVE.layupBonus), 0.02, 0.97);
   const made = g.rng.next() < chance;
   lineOf(g, pl).fga++;
@@ -841,7 +835,7 @@ function shoot(g: Game, pl: Player) {
   if (pl.wind < LIVE.quickTap && d < LIVE.layupRange) return layup(g, pl, hoop); // a quick tap under the rim
   if (pl.wind < LIVE.quickTap && d < LIVE.floaterRange && towardHoop(pl) > LIVE.driveSpeed) return layup(g, pl, hoop, true); // on the move: a floater
   const zone = zoneAt(d);
-  const rating = (zone === "rim" ? a(pl).finishing : a(pl).shooting) * fresh(g, pl);
+  const rating = liftRating((zone === "rim" ? a(pl).finishing : a(pl).shooting) * fresh(g, pl));
   const contest = contestOn(g, pl);
   const meter = pl.wind / LIVE.meterTime, win = shotWindow(rating, contest, d) * (pl.onFire ? LIVE.fireWindow : 1);
   const line = lineOf(g, pl);
@@ -854,7 +848,7 @@ function shoot(g: Game, pl: Player) {
   const quick = pl.wind < LIVE.quickTap;
   const short = !quick && meter < weakBelow;
   const base = short ? 0 : quick ? quickChance(zone, rating, contest, d) : makeChance(zone, rating, timing, contest);
-  const chance = base * longShotFactor(a(pl).shooting * fresh(g, pl), a(pl).strength, d); // half/full court: rare
+  const chance = base * longShotFactor(liftRating(a(pl).shooting * fresh(g, pl)), a(pl).strength, d); // half/full court: rare
   const made = !short && g.rng.next() < chance;
   g.lastShot = { side: pl.side, zone, timing, chance, made };
   pl.act = "air"; // the jump shot
@@ -1034,8 +1028,15 @@ function gain(g: Game, pl: Player) {
   g.ball.x = pl.x;
   g.ball.y = pl.y;
   g.gainAt = g.time;
-  if (changed || g.clockReset) g.shotClock = LIVE.shotClock;
-  if (changed && g.half) g.mustClear = pl.side; // half-court: take it back behind the arc first
+  // a change of hands: a full clock; the shooting team getting its own miss back (off the rim): 14
+  if (changed) g.shotClock = LIVE.shotClock;
+  else if (g.clockReset) g.shotClock = LIVE.reboundClock;
+  // streetball: a live change of hands (a steal, their rebound of a block) stops play; they check it at their top
+  if (changed && g.half && !checking && g.dead <= 0) {
+    g.dead = LIVE.deadBall * 0.6;
+    g.next = pl.side;
+    emit(g, "move", pl.side, "CHECK IT UP", pl.i);
+  }
   g.clockReset = false;
   g.reboundable = false;
   if (changed) {
@@ -1092,16 +1093,34 @@ function inbound(g: Game, side: Side) {
 
 /** Half-court: `side` checks the ball at the top of the key (behind the arc, so nothing to take back); the defence
  *  steps up in front. */
+let checking = false; // a check ball is handing it over (not a live change of hands)
 function checkBall(g: Game, side: Side) {
   const hoop = hoopOf(side), out = courtwards(side), top = COURT.three + 1.5;
   for (const pl of g.players) {
     const on = pl.side === side;
     Object.assign(pl, { x: COURT.w / 2 + (on ? 0 : 0.3), y: hoop.y + out * (on ? top : top - 1.6), z: 0, vx: 0, vy: 0, vz: 0, act: "free" as Act });
   }
+  checking = true;
   gain(g, team(g, side)[0]);
+  checking = false;
+  emit(g, "check", side, "CHECK UP", team(g, side)[0].i); // (the view waits for you to check it up)
   g.shotClock = LIVE.shotClock;
-  g.mustClear = null;
   g.resetAt = g.time;
+}
+
+/** Half-court: a miss is the end of it, no rebound; the ball drops and the other side checks it at the top. */
+function halfMiss(g: Game, f: Flight, side: Side, text: string) {
+  const b = g.ball;
+  emit(g, "miss", side, text);
+  g.dead = LIVE.deadBall;
+  g.next = other(side);
+  // off the rim and away, out toward the court (aimed down through the hoop, a miss looked like a make)
+  const ang = (courtwards(side) < 0 ? -Math.PI / 2 : Math.PI / 2) + (g.rng.next() - 0.5) * 2, far = 2 + g.rng.next() * 1.5;
+  b.flight = {
+    ...f, kind: "dead", x0: b.x, y0: b.y, z0: b.z, x1: b.x + Math.cos(ang) * far, y1: b.y + Math.sin(ang) * far, z1: 0,
+    peak: b.z + 0.9, t: 0, dur: 0.7, made: false,
+  };
+  stoppage(g);
 }
 
 function moveBall(g: Game, dt: number) {
@@ -1141,6 +1160,7 @@ function moveBall(g: Game, dt: number) {
     if (f.kind === "shot") {
       const side = sideOf(g, f.by);
       if (!f.made) g.players[f.by].streak = 0; // a miss ends the run (but not the fire)
+      if (g.half && !f.made) return halfMiss(g, f, side, f.short ? "AIR BALL!" : g.lastShot?.timing === "miss" ? "BRICK!" : "MISS");
       if (f.short) {
         // an air ball: it hits the floor and skips on a little way, loose for anyone
         const ux = f.x1 - f.x0, uy = f.y1 - f.y0, len = Math.hypot(ux, uy) || 1;
@@ -1182,7 +1202,8 @@ function moveBall(g: Game, dt: number) {
           return;
         }
         g.dead = LIVE.deadBall;
-        g.next = other(side);
+        // half-court: with halfKeepAt points already, a make keeps the ball (make it, take it)
+        g.next = g.half && g.score[side] - f.points >= LIVE.halfKeepAt ? side : other(side);
         b.flight = { ...f, kind: "dead", x0: b.x, y0: b.y, z0: b.z, z1: 0, peak: b.z, t: 0, dur: f.dur < 0.2 ? 0.25 : 0.4 }; // a slammed ball hits the floor fast
         stoppage(g);
       } else {

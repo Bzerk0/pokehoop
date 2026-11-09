@@ -29,9 +29,11 @@ export function isIphoneBrowser() {
 }
 
 /** TEST, iPhone only: the page gets room to scroll (the game stays pinned in place); the first scroll down tucks
- *  Safari's bars away, then scrolling locks. True while it's still waiting for that scroll. */
-export function useScrollToStart() {
+ *  Safari's bars away, then scrolling locks. Returns whether it's still waiting for that scroll, and `again`, which
+ *  brings the screen back (scrolled to the top, unlocked) for another go. */
+export function useScrollToStart(): [boolean, () => void] {
   const [waiting, setWaiting] = useState(isIphoneBrowser);
+  // room to scroll, the game pinned, for as long as the page is up
   useEffect(() => {
     if (!isIphoneBrowser()) return;
     const root = document.getElementById("root")!;
@@ -39,24 +41,45 @@ export function useScrollToStart() {
     spacer.style.height = "200vh"; // something to scroll
     document.body.appendChild(spacer);
     Object.assign(root.style, { position: "fixed", inset: "0", height: "auto" }); // the game stays put as the page scrolls
-    const lock = (e: TouchEvent) => e.preventDefault();
+    return () => {
+      spacer.remove();
+      Object.assign(root.style, { position: "", inset: "", height: "" });
+      window.scrollTo(0, 0);
+    };
+  }, []);
+  // waiting: watch for the scroll (sideways only); done: no more scrolling
+  useEffect(() => {
+    if (!isIphoneBrowser()) return;
+    if (!waiting) {
+      const lock = (e: TouchEvent) => e.preventDefault();
+      document.addEventListener("touchmove", lock, { passive: false });
+      return () => document.removeEventListener("touchmove", lock);
+    }
     const onScroll = () => {
-      if (window.scrollY < 40 || window.innerHeight > window.innerWidth) return; // (only once it's sideways)
-      setWaiting(false);
-      clearInterval(poll);
-      window.removeEventListener("scroll", onScroll);
-      document.addEventListener("touchmove", lock, { passive: false }); // scrolled: no more scrolling
+      if (window.scrollY >= 40 && window.innerWidth > window.innerHeight) setWaiting(false);
     };
     window.addEventListener("scroll", onScroll);
     const poll = window.setInterval(onScroll, 200); // and a check now and then, in case a scroll event is missed
     return () => {
       clearInterval(poll);
       window.removeEventListener("scroll", onScroll);
-      document.removeEventListener("touchmove", lock);
-      spacer.remove();
-      Object.assign(root.style, { position: "", inset: "", height: "" });
-      window.scrollTo(0, 0);
     };
+  }, [waiting]);
+  const again = () => {
+    window.scrollTo(0, 0);
+    setWaiting(true);
+  };
+  return [waiting, again];
+}
+
+/** A phone or tablet held upright (the title has its own layout for it). */
+export function usePortraitTouch() {
+  const check = () => isTouch() && window.innerHeight > window.innerWidth;
+  const [on, setOn] = useState(check);
+  useEffect(() => {
+    const update = () => setOn(check());
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
   }, []);
-  return waiting;
+  return on;
 }

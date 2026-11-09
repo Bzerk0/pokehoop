@@ -164,7 +164,7 @@ function hideTip() {
 }
 
 /** The live game's touch controls, over the edges of the screen; a "turn it sideways" card in portrait. */
-export function TouchControls({ team, nearRim }: { team: boolean; nearRim?: () => boolean }) {
+export function TouchControls({ team, nearRim, onBack }: { team: boolean; nearRim?: () => boolean; onBack?: () => void }) {
   const keys = loadKeys();
   const shoot = useRef<HTMLButtonElement>(null);
   const [turbo, setTurbo] = useState(false); // held: show the slide path to SHOOT
@@ -218,6 +218,7 @@ export function TouchControls({ team, nearRim }: { team: boolean; nearRim?: () =
       <div className="pointer-events-auto absolute inset-0 hidden flex-col items-center justify-center gap-3 bg-black p-6 text-center [@media(orientation:portrait)]:flex">
         <span className="font-head text-[16px] leading-[1.6] text-gold">TURN YOUR PHONE SIDEWAYS</span>
         <span className="text-[24px] text-cloud">The court needs the whole screen.</span>
+        {onBack && <button className="px-btn" onClick={onBack}><Arrow left /> BACK</button>}
       </div>
     </div>
   );
