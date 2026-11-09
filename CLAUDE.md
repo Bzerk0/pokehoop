@@ -220,7 +220,7 @@
   on any page forces it for the tab): the game page pins #root fixed and adds a 200vh spacer, shows SCROLL DOWN TO
   START (no touch controls yet); the first scroll past 40 px tucks Safari's bars away, then touchmove is blocked
   (locked) and the controls appear. In portrait that screen shows only TURN YOUR PHONE SIDEWAYS (a scroll in
-  portrait doesn't count); sideways it says to swipe up from the very right side, with a pointer on that edge.
+  portrait doesn't count); sideways it says to swipe up twice with a pause in between, with an up arrow.
   Layout (the user's tuning): stick 107 px from the left and 36 px up; the button cluster 59 px from the right and 36 px
   up, with PASS/TURBO 64 px and SHOOT 84 px (its columns are equal width, so the cluster's right offset sets SCREEN's spot);
   pause stays top-right; the phone game's footer "i" sits at 36 px / 16 px.

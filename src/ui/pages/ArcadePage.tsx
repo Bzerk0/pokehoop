@@ -229,10 +229,10 @@ export function ArcadePage() {
           <button className="px-btn pointer-events-auto hidden [@media(orientation:portrait)]:inline-flex" onClick={toPreGame}><Arrow left /> BACK</button>
           <span className="blink font-head text-[16px] leading-[1.6] text-gold [@media(orientation:portrait)]:hidden">SCROLL DOWN TO START</span>
           <span className="text-[24px] text-cloud [@media(orientation:portrait)]:hidden">
-            Swipe up from the very right side of your screen.
+            Swipe up twice, with a pause in between.
           </span>
-          {/* a pointer on that edge */}
-          <span className="blink absolute right-[24px] top-1/2 flex -translate-y-1/2 flex-col items-center gap-[4px] font-head text-[24px] text-gold [@media(orientation:portrait)]:hidden">
+          {/* an arrow pointing up: swipe up */}
+          <span className="blink absolute bottom-[32px] left-1/2 flex -translate-x-1/2 flex-col items-center gap-[4px] font-head text-[24px] text-gold [@media(orientation:portrait)]:hidden">
             <span className="inline-block -rotate-90"><Arrow /></span>
             {[0, 1, 2].map((i) => <span key={i} className="h-[6px] w-[6px] bg-gold" />)}
           </span>
