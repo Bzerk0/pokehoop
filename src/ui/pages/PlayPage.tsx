@@ -339,6 +339,21 @@ export function PlayPage() {
   return (
     <div className="mx-auto max-w-[1200px] p-4">
       {header}
+      {!playable && <p className="px-box mb-4 p-3 text-[22px] text-red">This team can't play yet: it needs all 8 players and no rule broken (check it in Free Build).</p>}
+      {/* the live game modes first: they're what most people came for */}
+      <h2 className="mb-2 mt-0 text-center font-head text-[16px] text-gold">PLAY LIVE</h2>
+      <div className="grid gap-3 sm:grid-cols-5">
+        {modes.map(([size, name, blurb]) => (
+          <button key={size} className="px-btn flex flex-col items-center gap-2 !py-4" onClick={() => (selectBlip(), setSelecting(size))} disabled={!playable}>
+            <span className="font-head text-[24px] leading-[32px]">{name} <Arrow /></span>
+            <span className="text-[20px] normal-case">{blurb}</span>
+          </button>
+        ))}
+      </div>
+      <div className="mb-5 mt-2 flex justify-center">
+        <button className="px-btn !text-[20px]" onClick={() => live(3, true)} disabled={!playable} title="Learn the controls in a quick practice">HOW TO PLAY</button>
+      </div>
+
       <div className="px-box mb-4 flex flex-wrap items-center gap-4 p-3">
         <label className="flex min-w-0 max-w-full items-center gap-2">
           <span className="shrink-0 text-[20px] text-cloud">YOUR TEAM</span>
@@ -367,25 +382,11 @@ export function PlayPage() {
         <button className="px-btn" onClick={() => (selectBlip(), setOppSeed(Date.now()))}>NEW OPPONENT</button>
       </div>
 
-      {!playable && <p className="px-box mb-4 p-3 text-[22px] text-red">This team can't play yet: it needs all 8 players and no rule broken (check it in Free Build).</p>}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_auto_1fr] lg:items-center">
         <TeamPanel lineup={mine} dex={dex} tag="YOU" />
         <span className="text-center font-head text-[32px] text-gold">VS</span>
         {cpu && <TeamPanel lineup={cpu} dex={dex} tag={`CPU · ${level}`} />}
-      </div>
-
-      <h2 className="mb-2 mt-5 text-center font-head text-[16px] text-gold">PLAY LIVE</h2>
-      <div className="grid gap-3 sm:grid-cols-5">
-        {modes.map(([size, name, blurb]) => (
-          <button key={size} className="px-btn flex flex-col items-center gap-2 !py-4" onClick={() => (selectBlip(), setSelecting(size))} disabled={!playable}>
-            <span className="font-head text-[24px] leading-[32px]">{name} <Arrow /></span>
-            <span className="text-[20px] normal-case">{blurb}</span>
-          </button>
-        ))}
-      </div>
-      <div className="mt-2 flex justify-center">
-        <button className="px-btn !text-[20px]" onClick={() => live(3, true)} disabled={!playable} title="Learn the controls in a quick practice">HOW TO PLAY</button>
       </div>
 
       <div className="px-box mt-6 flex flex-wrap items-center justify-center gap-3 p-3">

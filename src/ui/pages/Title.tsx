@@ -88,7 +88,7 @@ export function Title() {
   const items = [
     { label: "PLAY", onSelect: () => navigate("/play", { state: { starters: five.map((p) => p.id) } }) },
     { label: "DRAFT", onSelect: () => navigate("/draft") },
-    { label: "ABOUT", onSelect: () => setMessage("A free fan-made hoops game. Pokémon data and sprites come from PokéAPI.") },
+    { label: "ABOUT", onSelect: () => setMessage("A free fan-made hoops game, created by Hudson Bjerkness. Pokémon data and sprites come from PokéAPI.") },
     { label: "POKéDEX", onSelect: () => navigate("/dex") },
   ];
   const [pick, setPick] = useState(0);
@@ -214,7 +214,7 @@ export function Title() {
             {button(2, "left-[245px] top-[262px] h-[26px] w-[150px]", 10)}
             {button(3, "left-[245px] top-[292px] h-[26px] w-[150px]", 10)}
             {message && (
-              <button className="px-box absolute left-[118px] top-[138px] h-[76px] w-[406px] p-[10px] text-left text-[20px] leading-[20px] text-cloud" onClick={() => (backBlip(), setMessage(""))}>
+              <button className="px-box absolute left-[118px] top-[138px] min-h-[76px] w-[406px] p-[10px] text-left text-[20px] leading-[20px] text-cloud" onClick={() => (backBlip(), setMessage(""))}>
                 {message}
               </button>
             )}
