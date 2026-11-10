@@ -147,7 +147,8 @@ export const DEV_GROUPS: DevGroups = [
   {
     title: "GAME",
     items: [
-      ["spriteScale", "× the Pokémon sprites' size (live)"],
+      ["spriteScale", "× the Pokémon sprites' size (1v1)"],
+      ["spriteScaleTeam", "× the Pokémon sprites' size (team games)"],
       ["shotClock", "seconds on the shot clock"],
       ["reboundClock", "shot clock after your own miss comes back"],
       ["shotFloor", "weakest shooter counts as this rating"],

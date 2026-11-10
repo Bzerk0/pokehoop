@@ -161,7 +161,8 @@ export const LIVE = {
   targetBySize: { 1: 11, 3: 15, 5: 21 } as Record<number, number>, // first to this, by players a side
   shotClock: 24, // seconds (the user's call; PLAN.md said 14); resets when the ball changes hands
   reboundClock: 14, // seconds on the shot clock when the shooting team gets its own miss back (off the rim)
-  spriteScale: 1, // × the Pokémon sprites' size on the court (the dev menu: bigger reads better, smaller shows more court)
+  spriteScale: 1, // × the Pokémon sprites' size on the court in 1v1 (the dev menu: bigger reads better, smaller shows more court)
+  spriteScaleTeam: 0.8, // ... in team games (3v3, 5v5, SOLO, HOW TO PLAY, the title's)
   // gameplay aids
   quickTap: 0.12, // let go of K this fast: a quick shot, no meter
   quickClose: 0.15, // a quick shot's make chance gained right at the rim, fading out by quickCloseTo metres

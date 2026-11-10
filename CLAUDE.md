@@ -96,7 +96,7 @@
   big CHECK UP! and a prompt until you press shoot or pass. Shooting: live shooting/finishing ratings go through
   `liftRating` (LIVE.shotFloor: 0 counts as 35, 99 stays 99) so weak shooters aren't hopeless (5v5 CPU games ~59% made,
   ~75 points). Shot clock: 24 on a change of hands, `reboundClock` (14) when the shooting team gets its own miss back.
-  `LIVE.spriteScale` sizes the court sprites (dev menu GAME). Posterize: a slam with a defender within
+  `LIVE.spriteScale` sizes the court sprites in 1v1, `spriteScaleTeam` (0.8) in team games (dev menu GAME). Posterize: a slam with a defender within
   `posterRange` (live cut or replay) turns him into a trading card (`posterize`/`drawPoster`, POSTER_MS; his sprite
   hides meanwhile; the live cut holds `posterHold` longer). SIM THE REST plays the TipOff playback first. PRE-GAME from
   a game returns to the same team, difficulty, opponent and character select (ArcadeSetup `back`, PlayPage navState).

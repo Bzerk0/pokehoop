@@ -1111,7 +1111,7 @@ export class LiveView {
           lift = (body.scale.x / 2) * Math.abs(Math.sin(mat.rotation));
         }
       }
-      const [bsx, bsy] = (this.baseScale[i] ?? [body.scale.x, body.scale.y]).map((v) => v * LIVE.spriteScale);
+      const [bsx, bsy] = (this.baseScale[i] ?? [body.scale.x, body.scale.y]).map((v) => v * (this.g.size === 1 ? LIVE.spriteScale : LIVE.spriteScaleTeam));
       body.scale.set(bsx, bsy, 1);
       if (this.cinematic) lift += this.replayPose(i, pl, body, mat);
       // fallen players draw on a layer above the court, so nothing of them disappears into the floor
@@ -1590,7 +1590,7 @@ export class LiveView {
 
   /** The star stretches in the air and leans into a slam; a broken-ankled defender goes down. Returns any lift. */
   private replayPose(i: number, pl: Player, body: THREE.Sprite, mat: THREE.SpriteMaterial) {
-    const r = this.filming!, c = r.clip, [sx, sy] = this.baseScale[i].map((v) => v * LIVE.spriteScale);
+    const r = this.filming!, c = r.clip, [sx, sy] = this.baseScale[i].map((v) => v * (this.g.size === 1 ? LIVE.spriteScale : LIVE.spriteScaleTeam));
     if (i === c.who) {
       if (pl.z > 0.25) body.scale.set(sx * 0.88, sy * 1.14, 1);
       const slam = c.kind === "dunk" || c.kind === "special";
