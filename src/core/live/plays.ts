@@ -3,7 +3,7 @@
 // court, out is toward half court. Times are seconds since the play was called.
 import type { RatedPokemon } from "../types.ts";
 
-export const PLAYS = ["PICK & ROLL", "ISOLATION", "POST UP", "MOTION"] as const;
+export const PLAYS = ["PICK & ROLL", "ISOLATION", "POST UP", "MOTION", "DUNKER SPOT"] as const;
 export type PlayName = (typeof PLAYS)[number];
 export const SCHEMES = ["MAN", "2-3 ZONE", "PRESS", "DOUBLE STAR"] as const;
 export type SchemeName = (typeof SCHEMES)[number];
@@ -61,6 +61,15 @@ export const PLAY: Record<PlayName, PlayDef> = {
     rotate: 2.4,
     passRate: 2,
   },
+  "DUNKER SPOT": {
+    about: "BIG WAITS ON THE BASELINE; DRIVE AND DUMP IT OFF",
+    key: "big",
+    length: 7,
+    ballToKey: false,
+    keyPath: [{ at: 0, to: [2.6, 0.6] }], // the dunker spot: the baseline just outside the lane (a pass there can be an oop)
+    spacers: [[-6.4, 1.2], [6.0, 5.0], [-4.6, 6.4]],
+    passRate: 1.3,
+  },
 };
 
 export const SCHEME_ABOUT: Record<SchemeName, string> = {
@@ -89,6 +98,7 @@ export function playWeights(team: RatedPokemon[]): Record<PlayName | "NONE", num
     ISOLATION: (star.attrs.handles + star.attrs.shooting) / 2 + (ovrOf(star) - avg(ovrOf)) * 0.5 - 4, // a real star
     "POST UP": big,
     MOTION: avg((p) => p.attrs.passing) + 4, // everyone can pass
+    "DUNKER SPOT": (team[0].attrs.speed + Math.max(...bigs.map((p) => p.attrs.finishing))) / 2 - 2, // a driver and a finisher
   };
   const best = Math.max(...Object.values(score));
   const w = (s: number) => Math.exp((s - best) / 9);
@@ -98,6 +108,7 @@ export function playWeights(team: RatedPokemon[]): Record<PlayName | "NONE", num
     ISOLATION: w(score.ISOLATION),
     "POST UP": w(score["POST UP"]),
     MOTION: w(score.MOTION),
+    "DUNKER SPOT": w(score["DUNKER SPOT"]),
     NONE: w(avgScore) * 0.8, // freelancing: as likely as an average play
   };
 }

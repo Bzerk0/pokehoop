@@ -136,12 +136,18 @@ export class Music {
     this.readMute();
   }
 
+  /** The browser hasn't let the sound start yet (no tap it counts so far): a later tap should try again. */
+  get blocked() {
+    return !this.ctx || this.ctx.state !== "running";
+  }
+
   /** Which song is playing (or will, after a queued change). */
   get current() {
     return this.queued ?? this.name;
   }
 
   start() {
+    if (this.on && this.ctx?.state !== "running") void this.ctx?.resume(); // a later tap: let it out now
     if (this.on || !this.setup()) return;
     this.readMute(); // another player (the game or the menus) may have changed it
     const ctx = this.ctx!;

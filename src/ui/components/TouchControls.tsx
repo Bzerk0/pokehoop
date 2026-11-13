@@ -73,9 +73,9 @@ function Stick({ keys }: { keys: KeyMap }) {
 type Slide = { to: React.RefObject<HTMLButtonElement | null>; codes: string[] };
 
 /** A button that holds its keys down while your finger's on it (`tap`: a quick press instead, on touch). */
-function Pad({ label, codes, color, size = 52, wide, tap, slide, ref, onHold }: {
+function Pad({ label, codes, color, size = 52, wide, tap, slide, ref, onHold, flash = false }: {
   label: string; codes: string[]; color: PaletteName; size?: number; wide?: number; tap?: () => void; slide?: Slide;
-  ref?: React.Ref<HTMLButtonElement>; onHold?: (down: boolean) => void;
+  ref?: React.Ref<HTMLButtonElement>; onHold?: (down: boolean) => void; flash?: boolean; // flash: press me now
 }) {
   const [on, setOn] = useState(false);
   const downRef = useRef(false);
@@ -94,8 +94,9 @@ function Pad({ label, codes, color, size = 52, wide, tap, slide, ref, onHold }: 
     setOn(down);
     onHold?.(down);
     if (!down) slideTo(false);
-    if (tap) return void (down && tap());
-    if (down) pressed.current = codes;
+    // (the keys this press took are what it lets go: a button can switch jobs mid-press, SCREEN to STEAL)
+    if (down) pressed.current = tap ? [] : codes;
+    if (down && tap) tap();
     for (const c of pressed.current) key(c, down);
   };
   const move = (e: React.PointerEvent) => {
@@ -106,7 +107,7 @@ function Pad({ label, codes, color, size = 52, wide, tap, slide, ref, onHold }: 
   return (
     <button
       ref={ref}
-      className="flex select-none items-center justify-center border-4 border-black font-head text-[8px] text-black"
+      className={`flex select-none items-center justify-center border-4 border-black font-head text-[8px] text-black ${flash ? "flash-outline" : ""}`}
       style={{
         width: wide ?? size, height: size, background: PALETTE[color], opacity: on ? 1 : 0.75,
         boxShadow: on ? "none" : `inset -4px -4px 0 ${PALETTE.black}59`, transform: on ? "translate(2px, 2px)" : undefined,
@@ -164,16 +165,30 @@ function hideTip() {
 }
 
 /** The live game's touch controls, over the edges of the screen; a "turn it sideways" card in portrait. */
-export function TouchControls({ team, nearRim, onBack }: { team: boolean; nearRim?: () => boolean; onBack?: () => void }) {
+type TouchState = { dunk: boolean; defence: boolean; euro: boolean };
+const NONE: TouchState = { dunk: false, defence: false, euro: false };
+
+export function TouchControls({ team, state, onBack }: { team: boolean; state?: () => TouchState | undefined; onBack?: () => void }) {
   const keys = loadKeys();
   const shoot = useRef<HTMLButtonElement>(null);
   const [turbo, setTurbo] = useState(false); // held: show the slide path to SHOOT
-  const [dunk, setDunk] = useState(false); // near the rim with the ball: SHOOT says DUNK (and dunks)
+  // what the buttons say, polled from the game: DUNK by the rim, STEAL/JUMP on defence, flashing in a eurostep
+  const [now, setNow] = useState<TouchState>(NONE);
   useEffect(() => {
-    if (!nearRim) return;
-    const t = window.setInterval(() => setDunk(nearRim()), 100);
+    if (!state) return;
+    const t = window.setInterval(() => {
+      const s = state() ?? NONE;
+      setNow((p) => (p.dunk === s.dunk && p.defence === s.defence && p.euro === s.euro ? p : s));
+    }, 100);
     return () => clearInterval(t);
-  }, [nearRim]);
+  }, [state]);
+  const { dunk, defence, euro } = now;
+  // a double tap of sprint: the crossover with the ball, a steal without
+  const steal = () => [true, false, true, false].forEach((d) => key(keys.turbo, d));
+  // an iPad: everything a third bigger, and higher up (thumbs sit further up a tablet)
+  const tablet = Math.min(window.innerWidth, window.innerHeight) >= 700;
+  const big = (corner: "left" | "right"): React.CSSProperties =>
+    tablet ? { bottom: 110, transform: "scale(1.35)", transformOrigin: corner === "left" ? "0 100%" : "100% 100%" } : {};
   const [full, setFull] = useState(() => !!document.fullscreenElement);
   const [tip, setTip] = useState(showTip);
   useEffect(() => {
@@ -183,7 +198,7 @@ export function TouchControls({ team, nearRim, onBack }: { team: boolean; nearRi
   }, []);
   return (
     <div className="pointer-events-none fixed inset-0 z-30 select-none" style={{ touchAction: "none", ...SAFE }}>
-      <div className="pointer-events-auto absolute bottom-[36px] left-[107px]">
+      <div className="pointer-events-auto absolute bottom-[36px] left-[107px]" style={big("left")}>
         <Stick keys={keys} />
       </div>
       <div className="pointer-events-auto absolute right-[36px] top-[16px] flex gap-2">
@@ -192,18 +207,23 @@ export function TouchControls({ team, nearRim, onBack }: { team: boolean; nearRi
         <Pad label="II" codes={["Escape"]} color="cloud" size={36} />
       </div>
       {/* the buttons, in an arc for the right thumb: SHOOT biggest, nearest the corner */}
-      <div className="pointer-events-auto absolute bottom-[36px] right-[59px] grid grid-cols-3 items-end gap-[10px]">
+      <div className="pointer-events-auto absolute bottom-[36px] right-[59px] grid grid-cols-3 items-end gap-[10px]" style={big("right")}>
         <span /> {/* (the crossover / steal: double-tap TURBO, like sprint on a keyboard) */}
-        <Pad label="PASS" codes={[keys.pass]} color="sky" size={64} />
+        <Pad label="PASS" codes={[keys.pass]} color="sky" size={64} flash={euro} />
         <span />
-        {team ? <Pad label="SCREEN" codes={["ArrowLeft", "ArrowRight"]} color="steel" size={46} wide={60} /> : <span />}
+        {/* on defence: STEAL (a double tap of sprint); on offence in team games: SCREEN */}
+        {defence ? <Pad label="STEAL" codes={[]} tap={steal} color="red" size={46} wide={60} />
+          : team ? <Pad label="SCREEN" codes={["ArrowLeft", "ArrowRight"]} color="steel" size={46} wide={60} /> : <span />}
         {/* hold TURBO and slide onto SHOOT: the dunk, without lifting your thumb */}
         <span className="relative">
           <Pad label="TURBO" codes={[keys.turbo]} color="lime" size={64} slide={{ to: shoot, codes: ["Space"] }} onHold={setTurbo} />
           {turbo && <SlidePath />}
         </span>
         {/* Space always shoots, and tips off; by the rim it's DUNK and holds turbo too */}
-        <Pad ref={shoot} label={dunk ? "DUNK" : "SHOOT"} codes={dunk ? [keys.turbo, "Space"] : ["Space"]} color={dunk ? "orange" : "gold"} size={84} />
+        <Pad
+          ref={shoot} label={defence ? "JUMP" : dunk ? "DUNK" : "SHOOT"} codes={dunk && !defence ? [keys.turbo, "Space"] : ["Space"]}
+          color={dunk && !defence ? "orange" : "gold"} size={84} flash={euro}
+        />
       </div>
       {/* an iPhone's browser keeps its bars: only a home-screen app gets the whole screen, so say how (once) */}
       {tip && (

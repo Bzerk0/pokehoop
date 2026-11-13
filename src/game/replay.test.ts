@@ -159,6 +159,12 @@ describe("replays", () => {
       expect(c.frames.length).toBeGreaterThan(30);
       for (let t = c.start; t <= c.end; t += 0.05) expect(finite(cameraFor(c, t, frameAt(c.frames, t))), `${c.kind} at ${t}`).toBe(true);
     }
+    // every dunk and alley-oop look (three each, picked by when the clip starts), over a real clip's frames
+    for (const oop of [false, true])
+      for (const shift of [0, 0.14, 0.28]) {
+        const c = { ...done[0], kind: "dunk" as const, oop, aux: (done[0].who + 1) % 5, start: done[0].start + shift, keys: [done[0].keys[0]] };
+        for (let t = c.start; t <= c.end; t += 0.05) expect(finite(cameraFor(c, t, frameAt(c.frames, t))), `dunk oop=${oop} +${shift} at ${t}`).toBe(true);
+      }
     // every new camera script, run over a real clip's frames
     for (const kind of ["special", "eurostep", "floater", "screen", "perimeter"] as const) {
       const c = { ...done[0], kind, keys: [done[0].keys[0] - 0.4, done[0].keys[0]], vs: (done[0].who + 5) % 10, aux: (done[0].who + 1) % 10 };

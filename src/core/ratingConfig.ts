@@ -264,6 +264,10 @@ export const LIVE = {
   layupBonus: 0.08, // make chance a layup adds over a plain shot at the rim
   oopRange: 3.4, // metres from the rim a receiver can be for a pass to become an alley-oop
   oopFinishing: 60, // Finishing a receiver needs to catch and slam one
+  ballCallRoom: 4.5, // metres of clear floor round a teammate before he calls BALL! BALL! (wide open only)
+  oopPassMax: 12, // metres: a longer pass than this is never an alley-oop (no lobs from near full court)
+  coachLearnAfter: 3, // CPU defence: defensive trips with a scheme before it judges it...
+  coachBadPpp: 1.3, // ...and points a trip it gives up that make it switch to its best other scheme
   dunkApex: 0.55, // metres the ball rises above the rim before the slam
   dunkSlamTime: 0.08, // seconds for the ball to be hammered down through the rim (speeding up all the way)
   dunkSlam: 6, // m/s the dunker is pulled down with the slam
@@ -303,7 +307,7 @@ export const LIVE = {
   screenAsk: 4.5, // metres: the ball handler running straight at a teammate standing still makes him set a screen // seconds it stays planted
   // floaters and eurosteps: moving toward the hoop faster than driveSpeed counts as driving
   driveSpeed: 2, // m/s toward the hoop
-  floaterRange: 4.6, // a quick tap while driving, between layupRange and this from the rim, is a floater
+  floaterRange: 3.6, // a quick tap while driving, between layupRange and this from the rim, is a floater
   floaterBonus: 0.05, // make chance a floater adds (Finishing + Shooting; contests count half: it goes over the big)
   floaterAi: 0.6, // CPU floaters per second driving at the rim 2.5–4.5 m out with a man close (× its style's drive)
   euroAi: 0.8, // CPU eurosteps per second driving inside eurostepRange with a man close (× its style's drive)

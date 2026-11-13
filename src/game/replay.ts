@@ -48,7 +48,8 @@ export type Clip = {
   title: string; // the big caption: SLAM DUNK!
   who: number; // the star (player index)
   vs?: number; // the other one in it: the defender, the shooter who got blocked
-  aux?: number; // a third: the teammate who set the screen
+  aux?: number; // a third: the teammate who set the screen (or, for an alley-oop, who threw it)
+  oop?: boolean; // a dunk clip that's an alley-oop (its own camera scripts)
   ease?: number; // instead of slow-mo round the keys: start in full slow-mo and speed up to normal over this many seconds
   poss?: 0 | 1; // the team that should still have the ball when it's replayed (LiveView drops it once the ball changes hands)
   side: 0 | 1; // the star's team
@@ -63,7 +64,7 @@ export type Clip = {
 export class ClipSpotter {
   private dunkAt = new Map<number, number>();
   private stepAt = new Map<number, number>();
-  private oopAt = new Map<number, number>();
+  private oopAt = new Map<number, { t: number; from?: number }>();
   private euroAt = new Map<number, number>();
   private floatAt = new Map<number, number>();
   private specialAt = new Map<number, { t: number; title: string }>();
@@ -97,7 +98,7 @@ export class ClipSpotter {
       }
       case "move":
         if (e.text === "STEP BACK") this.stepAt.set(who, t);
-        if (e.text === "ALLEY-OOP!") this.oopAt.set(who, t);
+        if (e.text === "ALLEY-OOP!") this.oopAt.set(who, { t, from: e.vs });
         if (e.text === "EUROSTEP") this.euroAt.set(who, t);
         if (isSpecialDunk(e.text)) this.specialAt.set(who, { t, title: e.text });
         return null;
@@ -124,7 +125,9 @@ export class ClipSpotter {
           this.swingClip = null;
         }
         if (special != null && dunk != null && t - special.t < 2) return clip("special", `${tag}${special.title}`, who, special.t - 1.6, [t], t + 1.5, H.special + extra);
-        if (oop != null && t - oop < 2.5) return clip("dunk", `${tag}ALLEY-OOP!`, who, oop - 1, [t], t + 1.2, H.oop + extra);
+        if (oop != null && t - oop.t < 2.5) {
+          return { ...clip("dunk", `${tag}ALLEY-OOP!`, who, oop.t - 1, [t], t + 1.2, H.oop + extra, undefined, oop.from), oop: true };
+        }
         if (euro != null && t - euro < 2.5) return clip("eurostep", `${tag}EUROSTEP!`, who, euro - 1.2, [euro, euro + LIVE.euroTime / 2, t], t + 1, H.eurostep + extra);
         if (dunk != null && t - dunk < 1) return clip("dunk", `${tag}SLAM DUNK!`, who, dunk - 1.8, [t], t + 1.2, H.dunk + extra);
         if (float != null && t - float < 1.5) return clip("floater", `${tag}FLOATER!`, who, float - 1.4, [float, t], t + 1, H.floater + extra);
@@ -223,9 +226,33 @@ export function cameraFor(clip: Clip, t: number, s: Snap): Shot {
 
   switch (clip.kind) {
     case "dunk": {
+      // three looks for a dunk, three for an alley-oop; each clip keeps one (from when it starts, not a dice roll)
+      const look = Math.floor(Math.abs(clip.start) * 7.31) % 3, after = Math.max(0, t - k0);
+      const passer = clip.oop && clip.aux != null ? s.players[clip.aux] : null;
+      if (clip.oop && look === 1 && passer) {
+        // the fast-break oop (Wade to LeBron): from behind the passer, looking down the floor along the lob; then
+        // the slam from low on the baseline
+        if (t < k0 - 0.12) return shot([passer.x - fx * 4, passer.y - fy * 4, 2.4], [(star.x + hoop.x) / 2, (star.y + hoop.y) / 2, 2.6], 50, 0);
+        return shot([hoop.x + nx * 2.2 + fx * 1.5, hoop.y + ny * 2.2 + fy * 1.5, 0.6], [hoop.x - fx * 0.5, hoop.y - fy * 0.5, rimZ], 62, 1);
+      }
+      if (clip.oop && look === 2) {
+        // the lob cam: riding the ball in, then right up at the rim from in front
+        const b = s.ball;
+        if (t < k0 - 0.15) return shot([b.x - fx * 2.5, b.y - fy * 2.5, b.z + 0.8], [star.x, star.y, rimZ], 52, 0);
+        return shot([hoop.x - fx * 2.2 + nx * 0.6, hoop.y - fy * 2.2 + ny * 0.6, rimZ + 0.6], [hoop.x, hoop.y, rimZ + 0.2], 56, 1);
+      }
+      if (!clip.oop && look === 1) {
+        // the rim cam: high behind the board, looking down the lane at the dunker coming in, then down at the rim
+        const pos: [number, number, number] = [hoop.x + nx * 0.5 + fx * 1.2, hoop.y + ny * 0.5 + fy * 1.2, rimZ + 3.2];
+        return t < k0 - 0.35 ? shot(pos, [star.x, star.y, 1.2], 58, 0) : shot(pos, [hoop.x - fx * 0.3, hoop.y - fy * 0.3, rimZ], 54, 1);
+      }
+      if (!clip.oop && look === 2) {
+        // low on the sideline, tracking the dunker; then a low side look at the rim
+        if (t < k0 - 0.3) return shot([star.x + nx * 4.5, star.y + ny * 4.5, 0.7], [star.x + fx * 1.5, star.y + fy * 1.5, 1.8], 50, 0);
+        return shot([hoop.x + nx * 3.2 - fx * 0.8, hoop.y + ny * 3.2 - fy * 0.8, 1], [hoop.x, hoop.y, rimZ], 50 - after * 3, 1);
+      }
       // tracking from the side as they take off, then a cut to low behind the baseline, looking up at the slam
       if (t < k0 - 0.45) return shot([star.x + nx * 7 - fx * 0.5, star.y + ny * 7 - fy * 0.5, 1.8], [star.x + fx, star.y + fy, 1.4], 44, 0);
-      const after = Math.max(0, t - k0);
       return shot([hoop.x + nx * 2.4 + fx * 3.4, hoop.y + ny * 2.4 + fy * 3.4, 0.5 + after * 0.6], [hoop.x - fx * 0.6, hoop.y - fy * 0.6, rimZ - 0.4], 60 - after * 4, 1);
     }
     case "special": {

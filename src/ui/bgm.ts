@@ -18,12 +18,12 @@ function apply() {
 
 if (typeof window !== "undefined") {
   const unlock = () => {
-    if (unlocked) return;
+    if (unlocked && !music.blocked) return;
     unlocked = true;
     apply();
   };
-  window.addEventListener("pointerdown", unlock, true);
-  window.addEventListener("keydown", unlock, true);
+  // (iOS only counts a finished tap, touchend / click, as the go-ahead for sound; desktop takes the first press)
+  for (const ev of ["pointerdown", "keydown", "touchend", "click"]) window.addEventListener(ev, unlock, true);
   window.addEventListener("keydown", (e) => {
     const el = e.target as HTMLElement | null;
     if (e.code !== "KeyM" || e.repeat || !want || el?.closest("input, textarea, select, [contenteditable]")) return;

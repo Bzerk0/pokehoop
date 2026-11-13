@@ -9,6 +9,16 @@ export type Difficulty = (typeof DIFFICULTIES)[number]["name"];
 export const PLACES = ["CERULEAN", "VERMILION", "SAFFRON", "ECRUTEAK", "LAVARIDGE", "SNOWPOINT", "NIMBASA", "LUMIOSE", "HAU'OLI", "MOTOSTOKE", "MESAGOZA", "PEWTER", "GOLDENROD", "MAUVILLE"];
 export const MASCOTS = ["TIDE", "VIPERS", "THUNDER", "EMBERS", "GALE", "BOULDERS", "PHANTOMS", "COMETS", "BLIZZARD", "WILDCATS", "DYNAMOS", "STAMPEDE", "SPARKS", "TITANS"];
 
+/** The Pokémon a CPU team sends out by default for a game of `size` (what lineupGame picks with no choice made):
+ *  5 a side PG–C, 3 a side PG, SF and C, 1 a side its best starter. Dex numbers, in court order. */
+export function presetPicks(lineup: Lineup, size: 1 | 3 | 5, dex: Map<number, RatedPokemon>): number[] {
+  const ids = lineup.ids.filter((id): id is number => id != null);
+  if (size === 5) return ids.slice(0, 5);
+  if (size === 3) return [ids[0], ids[2], ids[4]];
+  const best = ids.slice(0, 5).reduce((x, y) => (dex.get(y)!.ovr[dex.get(y)!.best] > dex.get(x)!.ovr[dex.get(x)!.best] ? y : x));
+  return [best];
+}
+
 export const difficultyOf = (name: Difficulty) => DIFFICULTIES.find((d) => d.name === name)!;
 export const allowedIn = (name: Difficulty, mode: Mode) => mode === "unlimited" || !difficultyOf(name).unlimitedOnly;
 

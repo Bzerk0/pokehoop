@@ -41,7 +41,7 @@ export function ArcadeCabinet({ children, view = "flat", portrait = false }: { c
             {children}
           </Cabinet3D>
         ) : (
-          <Band y={panelTop} h={PANEL_H} className="bg-navy">
+          <Band y={panelTop} h={PANEL_H} className="screen-slam bg-navy">
             <Stripes height={PANEL_H} />
             <Bezel pad={PAD}>{children}</Bezel>
           </Band>

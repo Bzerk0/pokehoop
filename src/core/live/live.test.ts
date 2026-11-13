@@ -3,14 +3,14 @@ import { describe, expect, it } from "vitest";
 import { AI_STYLES, LIVE, LIVE_AI } from "../ratingConfig.ts";
 import { rateAll } from "../ratings.ts";
 import type { RatedPokemon } from "../types.ts";
-import { makeAi, makeCoach, styleOf } from "./ai.ts";
+import { adapt, makeAi, makeCoach, styleOf } from "./ai.ts";
 import {
   blockChance, boxes, callPlay, passBall, callScheme, COURT, dist, energyOf, giveBall, hoopOf, keyPlayer, liftRating, lineupGame, longShotFactor, makeChance, meterWindow, newGame, quickChance,
   NO_INPUT, shotWindow, spotOf, step, timingOf, type Game, type GameEvent, type Input,
 } from "./game.ts";
 import { canSimRest, simTheRest } from "./handover.ts";
 import { score } from "../stats.ts";
-import { cpuTeam } from "../cpuTeam.ts";
+import { cpuTeam, presetPicks } from "../cpuTeam.ts";
 import { playWeights, ZONE, type PlayName, type SchemeName } from "./plays.ts";
 
 const pool = rateAll(JSON.parse(readFileSync("public/data/pokemon.json", "utf8")));
@@ -363,6 +363,17 @@ describe("plays and schemes (Phase 7)", () => {
         if (g.ball.holder === big && !g.ball.flight && dist(g.players[big], hoopOf(0)) < 4) fed = true;
       });
       return fed;
+    });
+    expect(ok).toBeGreaterThanOrEqual(0.6);
+  });
+
+  it("DUNKER SPOT runs: the big parks on the baseline beside the lane", () => {
+    const ok = share(10, (seed) => {
+      const { g, ai } = halfCourt(seed, "DUNKER SPOT");
+      const big = g.players[g.calls[0].key!], hoop = hoopOf(0);
+      run(g, ai, 2.5);
+      const spot = { x: COURT.w / 2 + 2.6 * COURT.scale, y: hoop.y - 0.6 * COURT.scale };
+      return dist(big, spot) < 1.6 || g.ball.holder === big.i || g.ball.flight != null;
     });
     expect(ok).toBeGreaterThanOrEqual(0.6);
   });
@@ -840,6 +851,26 @@ describe("long shots and double jumps", () => {
     expect(them.y).toBeGreaterThan(me.y); // further up the screen than you
   });
 
+  it("the CPU bench drops a defence that keeps getting scored on, for the one that's done best", () => {
+    expect(adapt("MAN", {})).toBe("MAN"); // nothing to go on yet
+    expect(adapt("MAN", { MAN: { trips: 2, pts: 6 } })).toBe("MAN"); // too soon to judge
+    expect(adapt("MAN", { MAN: { trips: 4, pts: 3 } })).toBe("MAN"); // it's working
+    expect(adapt("MAN", { MAN: { trips: 4, pts: 8 }, "2-3 ZONE": { trips: 3, pts: 0 } })).toBe("2-3 ZONE"); // switch
+    expect(adapt("MAN", { MAN: { trips: 4, pts: 8 }, "2-3 ZONE": { trips: 3, pts: 6 }, PRESS: { trips: 3, pts: 6 } })).toBe("DOUBLE STAR"); // untried beats bad
+  });
+
+  it("the ready-made opponent (presetPicks) is who the CPU sends out by default, and chosen opponents (awayPicks) win", () => {
+    const dex = new Map(pool.map((p) => [p.id, p]));
+    const home = cpuTeam(pool, "PRO", "unlimited", 1), away = cpuTeam(pool, "PRO", "unlimited", 2);
+    for (const size of [1, 3, 5] as const) {
+      const g = lineupGame(home, away, dex, size, 3);
+      expect(g.players.filter((p) => p.side === 1).map((p) => p.p.id)).toEqual(presetPicks(away, size, dex));
+    }
+    // choose the opponent: slots 4, 1 and 6 of its lineup
+    const g = lineupGame(home, away, dex, 3, 3, false, undefined, false, [4, 1, 6]);
+    expect(g.players.filter((p) => p.side === 1).map((p) => p.p.id)).toEqual([4, 1, 6].map((s) => away.ids[s]));
+  });
+
   it("the shot clock: a full 24 on a change of hands, 14 when the shooting team gets its own miss back", () => {
     const g = newGame([named("lucario")], [named("garchomp")], 4);
     const [me, them] = g.players;
@@ -1213,6 +1244,29 @@ describe("1v1 pacing, screens, floaters, eurosteps and special dunks", () => {
     expect(tight.some((t) => t !== "DISH!")).toBe(true); // not every time
     expect(open.includes("DISH!")).toBe(false);
     expect(open.includes("none")).toBe(false);
+  });
+
+  it("you can call a eurostep's finish: shoot (even smothered) or pass it out (even wide open)", () => {
+    const team = (a: string, b: string, c: string) => [named(a), named(b), named(c)];
+    const finish = (call: "shoot" | "pass", smother: boolean) => {
+      const g = newGame(team("lucario", "pikachu", "eevee"), team("snorlax", "machamp", "onix"), 3);
+      const me = g.players[0], hoop = hoopOf(0);
+      for (const p of g.players) Object.assign(p, { x: p.side ? 1 : COURT.w - 1, y: hoop.y - 8, vx: 0, vy: 0 });
+      Object.assign(me, { x: hoop.x, y: hoop.y - 4.5, vx: 0, vy: 5 });
+      giveBall(g, 0);
+      step(g, g.players.map((p) => (p.i === 0 ? hold({ y: 1, cross: true }) : NO_INPUT)), DT);
+      for (let i = 0; i < 90; i++) {
+        if (smother) Object.assign(g.players.find((p) => p.side === 1)!, { x: me.x, y: me.y + 0.5, vx: 0, vy: 0 });
+        const press = i === 5 ? (call === "shoot" ? { shoot: true } : { steal: true }) : {};
+        step(g, g.players.map((p) => (p.i === 0 ? hold({ y: 1, ...press }) : NO_INPUT)), DT);
+        const e = g.events.find((e) => e.text === "DISH!" || (e.kind === "release" && (e.text === "LAYUP" || e.text === "FLOATER")));
+        if (e) return e.text;
+      }
+      return "none";
+    };
+    expect(finish("shoot", true)).not.toBe("DISH!");
+    expect(finish("shoot", true)).not.toBe("none");
+    expect(finish("pass", false)).toBe("DISH!");
   });
 
   it("the CPU throws floaters and eurosteps on its drives (drive-heavy styles most)", () => {

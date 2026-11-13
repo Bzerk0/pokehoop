@@ -31,6 +31,8 @@ export type ArcadeSetup = {
   size: 1 | 3 | 5;
   /** Your chosen players (lineup slots) from the select screen. */
   picks?: number[];
+  /** The opponent's chosen lineup slots (the opponent select). */
+  awayPicks?: number[];
   /** One-character mode (SOLO on the Play page). */
   solo?: boolean;
   /** Half-court 1v1 (HALF 1V1 on the Play page). */
@@ -40,7 +42,10 @@ export type ArcadeSetup = {
   level: Difficulty;
   tutorial?: boolean; // HOW TO PLAY: a practice 3v3, step by step
   /** Where PRE-GAME goes back to: this team and opponent, that mode's character select. */
-  back?: { team: string; select: 1 | 3 | 5 | "solo" | "half" | null; difficulty: Difficulty; oppSeed: number };
+  back?: {
+    team: string; select: 1 | 3 | 5 | "solo" | "half" | null; difficulty: Difficulty; oppSeed: number;
+    chosen?: number[] | "team"; oppPicks?: number[]; // the players you took and the opponent you picked: straight back to the opponent select
+  };
 };
 
 /** An old link or a stale history entry (from an earlier version) goes back to the pre-game screen. */
@@ -62,7 +67,8 @@ function Energy({ value }: { value: number }) {
 /** The live game (PLAN.md Phases 5–8): the 3D game in a whole-number-scaled pixel stage; Esc pauses (subs, music,
  *  sim the rest); a full game ends on the results screen with the box score. */
 export function ArcadePage() {
-  useMusic(null); // the live game plays its own
+  const [final, setFinal] = useState<{ score: [number, number]; result: GameResult | null } | null>(null);
+  useMusic(final?.result ? "menu" : null); // the live game plays its own; the score card gets the menu song
   const navigate = useNavigate();
   const state = useLocation().state;
   const setup = valid(state) ? state : null;
@@ -78,7 +84,6 @@ export function ArcadePage() {
   const [pickOut, setPickOut] = useState<number | null>(null); // the court player chosen to come off
   const [, refresh] = useState(0); // re-read the roster after a sub
   const [simming, setSimming] = useState<GameResult | null>(null); // "sim the rest": the tip-off playback is on
-  const [final, setFinal] = useState<{ score: [number, number]; result: GameResult | null } | null>(null);
 
   useEffect(() => {
     if (!setup || !dex || !host.current) return;
@@ -91,7 +96,7 @@ export function ArcadePage() {
       ]);
       if (dead || !host.current) return;
       game.current = new LiveView(host.current, {
-        home: setup.home, away: setup.away, size: setup.size, picks: setup.picks, solo: setup.solo, half: setup.half, dex, youColor: setup.youColor, cpuColor: setup.cpuColor,
+        home: setup.home, away: setup.away, size: setup.size, picks: setup.picks, awayPicks: setup.awayPicks, solo: setup.solo, half: setup.half, dex, youColor: setup.youColor, cpuColor: setup.cpuColor,
         level: LIVE_AI[setup.tutorial ? "ROOKIE" : setup.level], seed: Date.now() >>> 0, tutorial: setup.tutorial,
         onOver: (s, result) => setFinal({ score: s, result }),
       });
@@ -156,7 +161,7 @@ export function ArcadePage() {
   }, [paused, final]);
 
   // TEST (iPhone in Safari): scroll down first, so Safari tucks its bars away; then the page locks
-  const [scrollFirst, scrollAgain] = useScrollToStart();
+  const [scrollFirst, scrollAgain] = useScrollToStart(!final && !simming); // (off for the results: they scroll)
 
   if (!setup) return <Navigate to="/play" replace />;
 
@@ -220,7 +225,7 @@ export function ArcadePage() {
 
   return (
     <div className="h-full min-h-[360px]" style={touch ? { touchAction: scrollFirst ? "pan-y" : "none" } : undefined /* no scrolling or zooming the game on a phone */}>
-      {touch && dex && !paused && !final && !scrollFirst && <TouchControls team={setup.size > 1} nearRim={() => !!game.current?.nearRim} onBack={toPreGame} />}
+      {touch && dex && !paused && !final && !scrollFirst && <TouchControls team={setup.size > 1} state={() => game.current?.touchState} onBack={toPreGame} />}
       {scrollFirst && (
         <div className="pointer-events-none fixed inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/70 px-16 text-center [@media(orientation:portrait)]:bg-black">
           {/* sideways first; then the scroll (it tucks Safari's bars away) */}
@@ -366,7 +371,7 @@ export function ArcadePage() {
                     </span>
                   )}
                   {/* iPhone: the scroll-to-start screen again, for when Safari's bars come back */}
-                  {!final && isIphoneBrowser() && <button className="px-btn w-full !py-0 !text-[20px]" onClick={() => (moveBlip(), setPaused(false), scrollAgain())}>HIDE ADDRESS BAR</button>}
+                  {!final && isIphoneBrowser() && <button className="px-btn w-full !py-0 !text-[20px]" onClick={() => (moveBlip(), scrollAgain())}>HIDE ADDRESS BAR</button>}
                   {!final && live?.canSimRest && <button className="px-btn w-full !py-0 !text-[20px]" onClick={simRest}>SIM THE REST <Arrow /></button>}
                   <button className="px-btn w-full !py-0 !text-[20px]" autoFocus={!!final && !setup.tutorial} onClick={restart}>
                     {setup.tutorial ? "START OVER" : final ? "REMATCH" : "RESTART"}

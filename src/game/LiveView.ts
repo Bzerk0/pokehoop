@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import { makeAi, makeCoach, type AiLevel } from "../core/live/ai.ts";
 import {
-  callPlay, callScheme, COURT, dist, energyOf, facedTeammate, hoopOf, handlerOf, handZ, lineupGame, liveResult, meterWindow, NO_INPUT, reachOf, step,
+  callPlay, callScheme, COURT, dist, energyOf, facedTeammate, hoopOf, handlerOf, handZ, lineupGame, liveResult, meterWindow, NO_INPUT, reachOf, step, towardHoop,
   subIn, type Game, type GameEvent, type Input, type Player,
 } from "../core/live/game.ts";
 import { PLAY, PLAYS, SCHEME_ABOUT, SCHEMES, type PlayName, type SchemeName } from "../core/live/plays.ts";
@@ -31,6 +31,8 @@ export type LiveSetup = {
   size: 1 | 3 | 5;
   /** The lineup slots you picked on the select screen (default: by size); the rest of your team is the bench. */
   picks?: number[];
+  /** The opponent's chosen lineup slots (the opponent select); none: its default players. */
+  awayPicks?: number[];
   /** One-character mode: you only play as your P1 (passing doesn't switch), and call a play every possession. */
   solo?: boolean;
   /** Half-court 1v1: both attack the far hoop; take it back after a stop, check it after a make. */
@@ -117,7 +119,7 @@ export class LiveView {
   private dressed: number[] = []; // which Pokémon each sprite shows (a sub changes it)
   private auras: THREE.Sprite[] = []; // the ON FIRE flames
   // each hoop's shot clock and violation glow (0: your end, 1: the far end)
-  private hoopFx: ({ frame: THREE.MeshBasicMaterial; glow: THREE.MeshBasicMaterial; clock: THREE.Sprite; ctx: CanvasRenderingContext2D; tex: THREE.Texture; shown: number } | null)[] = [null, null];
+  private hoopFx: ({ frame: THREE.MeshBasicMaterial; glow: THREE.MeshBasicMaterial; clock: THREE.Object3D; ctx: CanvasRenderingContext2D; tex: THREE.Texture; shown: number } | null)[] = [null, null];
   private glowUntil = [0, 0];
   private endAt = 0; // when the final buzzer went (ms)
   private ringMats: { mate: THREE.MeshBasicMaterial; target: THREE.MeshBasicMaterial } | null = null;
@@ -188,7 +190,8 @@ export class LiveView {
   private manBurst!: THREE.Mesh; // the red ring rippling out from under your man (SOLO)
   private manSince = -1; // when your man's ring last came up (-1: not up)
   private manIntro = true; // the first defensive trip: YOUR MAN over their head
-  private oopWait: { who: number; until: number } | null = null; // an oop lob in the air: cut live when it's caught
+  private ballCaller = -1; // the teammate calling BALL! BALL! right now (one at a time)
+  private oopWait: { who: number; from?: number; until: number } | null = null; // an oop lob in the air: cut live when it's caught
   private manNow = -1; // your man (SOLO, on defence), for the YOUR MAN marker
   private lastAttractKind = ""; // the title screen's last clip kind (it tries not to show the same twice running)
   private attractSkips = 0;
@@ -214,7 +217,7 @@ export class LiveView {
   constructor(private host: HTMLElement, private d: LiveSetup) {
     W = COURT.w;
     L = COURT.l;
-    this.g = lineupGame(d.home, d.away, d.dex, d.tutorial ? 3 : d.size, d.seed, !!d.tutorial, d.tutorial ? undefined : d.picks, !!d.half && !d.tutorial && d.size === 1);
+    this.g = lineupGame(d.home, d.away, d.dex, d.tutorial ? 3 : d.size, d.seed, !!d.tutorial, d.tutorial ? undefined : d.picks, !!d.half && !d.tutorial && d.size === 1, d.tutorial ? undefined : d.awayPicks);
     this.g.solo = !!d.solo && !d.tutorial && this.g.size > 1;
     this.tutor = d.tutorial ? new Tutorial(this.g) : null;
     this.crowd = d.crowd ?? CROWD;
@@ -262,6 +265,16 @@ export class LiveView {
   setAutoSub(on: boolean) {
     this.g.autoSub[0] = on;
   }
+  /** What the touch buttons should say: DUNK by the rim, STEAL/JUMP on defence, SHOOT/PASS flashing in a eurostep. */
+  get touchState() {
+    const g = this.g, me = g.players[g.control], live = this.started && !this.ended;
+    return {
+      dunk: this.nearRim,
+      defence: live && g.poss === 1,
+      euro: live && me.act === "cross" && me.euro !== 0 && g.ball.holder === me.i,
+    };
+  }
+
   /** You've got the ball close enough to the rim to dunk (the touch controls' SHOOT says DUNK). */
   get nearRim() {
     const g = this.g, me = g.players[g.control];
@@ -732,14 +745,22 @@ export class LiveView {
     // a red glow round the board, lit when the shot clock runs out on this end
     const glow = this.keep(basic("red", { transparent: true, opacity: 0, depthWrite: false }));
     box(2.15, 1.4, 0.02, glow, 0, boardY + out * 0.03, 3.435);
-    // the shot clock on top of the board: a little pixel display (a sprite, so it reads the right way round)
+    // the shot clock on top of the board: a little pixel display, a flat panel parallel to the backboard (so it turns
+    // with the board in a cinematic): one face looking out at the court, one at the stand behind (each reads right)
     const canvas = document.createElement("canvas");
     canvas.width = 24;
     canvas.height = 12;
     const tex = this.keep(pixelTexture(canvas));
     // (your own end's is near the camera, so it's smaller and fainter: it mustn't hide the play)
-    const clock = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: end === 0 ? 0.45 : 1 })));
-    clock.scale.set(end === 0 ? 0.5 : 0.9, end === 0 ? 0.25 : 0.45, 1);
+    const clock = new THREE.Group();
+    const faceMat = this.keep(new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: end === 0 ? 0.45 : 1, side: THREE.FrontSide }));
+    const [cw, ch] = end === 0 ? [0.5, 0.25] : [0.9, 0.45], toCourt = end === 1 ? 1 : -1; // +z (three) is toward your end
+    for (const dir of [1, -1]) {
+      const face = new THREE.Mesh(this.keep(new THREE.PlaneGeometry(cw, ch)), faceMat);
+      face.position.z = 0.03 * dir * toCourt;
+      face.rotation.y = dir === toCourt ? 0 : Math.PI;
+      clock.add(face);
+    }
     clock.position.copy(at(W / 2, boardY, 4.35));
     this.scene.add(clock);
     this.hoopFx[end] = { frame: white, glow, clock, ctx: canvas.getContext("2d")!, tex, shown: -1 };
@@ -1282,12 +1303,17 @@ export class LiveView {
     const top = this.topClips.slice(0, LIVE.topPlays);
     if (!top.length || this.tutor) return this.overNow();
     this.reel = [...top].reverse();
+    // the reel gets the big title theme
+    this.music.setSong("title");
+    this.music.start();
     const first = this.reel.shift()!;
     this.startReplay(first, `TOP PLAYS #${this.reel.length + 1}`, true);
   }
 
   private overNow() {
-    this.d.onOver([...this.g.score] as [number, number], this.g.timed ? liveResult(this.g) : null);
+    this.music.stop();
+    // every mode ends on the results (box score and all), 1v1 too; the practice game just ends
+    this.d.onOver([...this.g.score] as [number, number], this.g.practice ? null : liveResult(this.g));
   }
 
   /** Put the players and ball where a snapshot has them (the game itself is paused). */
@@ -1409,7 +1435,7 @@ export class LiveView {
     }
     // an alley-oop: the pass plays out in the normal view; the cut waits for the catch
     const lob = g.events.find((e) => e.text === "ALLEY-OOP!" && e.who != null);
-    if (lob && g.ball.flight?.oop) this.oopWait = { who: lob.who!, until: g.time + g.ball.flight.dur + 0.5 };
+    if (lob && g.ball.flight?.oop) this.oopWait = { who: lob.who!, from: lob.vs, until: g.time + g.ball.flight.dur + 0.5 };
     if (this.oopWait && g.time > this.oopWait.until) this.oopWait = null;
     const on = LIVE.cineShots;
     if (c) {
@@ -1436,6 +1462,7 @@ export class LiveView {
       const special = g.events.find((e) => e.kind === "move" && e.who != null && isSpecialDunk(e.text));
       const euro = g.events.find((e) => e.kind === "move" && e.text === "EUROSTEP" && e.who != null);
       const floater = g.events.find((e) => e.kind === "release" && e.text === "FLOATER" && e.who != null);
+      const from = this.oopWait?.from;
       if (caught != null) this.oopWait = null;
       if (special && dunker && dunker.i === special.who && on.special >= 1) {
         // a 360, a windmill...: the low, close dunk camera, longer slow motion, and its name in lights
@@ -1446,6 +1473,7 @@ export class LiveView {
         // just before the catch at the top of the leap: the catch, then the slam from under the rim
         const key = g.time + lobLeft + LIVE.dunkSlamTime + 0.02;
         go("dunk", caught, [key], key + 1.5);
+        Object.assign(this.cine!.clip, { oop: true, aux: from }); // (its own camera looks)
         this.shout(["ALLEY-OOP!", "OOP!", "FROM THE SKY!"], g.players[caught].side, now);
       } else if (dunker && on.dunk >= 1) {
         const key = g.time + LIVE.dunkTime + 0.12; // when the ball goes through
@@ -1541,6 +1569,14 @@ export class LiveView {
     c.fillRect(0, VIEW_H - 28, VIEW_W, 28);
     if (this.cineCaption) this.drawCaption(this.cineCaption, now, VIEW_H - 28 - 14);
     this.drawPoster(now);
+    // your eurostep: call it, shoot or pass (else the game picks)
+    if (this.touchState.euro && Math.floor(now / 200) % 2 === 0) {
+      c.font = `8px ${FONT}`;
+      c.textAlign = "center";
+      c.textBaseline = "top";
+      c.fillStyle = PALETTE.gold;
+      c.fillText(this.touch ? "SHOOT OR PASS!" : `${keyName(this.keys.shoot)}: SHOOT   ${keyName(this.keys.pass)}: PASS`, VIEW_W / 2, 10);
+    }
   }
 
   /** A big caption that slams in and settles, with a hard shadow, its bottom at `bottom`. */
@@ -1896,11 +1932,14 @@ export class LiveView {
     }
 
     // your teammates' numbers over their heads (keys 1–5 pass straight to them)
+    const caller = this.pickCaller();
     if (g.size > 1)
       for (const pl of g.players) {
         if (pl.side !== 0 || pl.i === g.control) continue;
         const s = this.toScreen(pl.x, pl.y, pl.z + this.bodies[pl.i].scale.y + 0.25); // just over the sprite
         if (s.y < 22 || s.y > VIEW_H - 24) continue;
+        // in a good spot for a pass from you: BALL! BALL!
+        if (pl.i === caller && Math.floor(now / 300) % 2 === 0) text("BALL! BALL!", s.x, s.y - 22, "lime", 8, "center", true);
         if (pl.i === this.passTarget) {
           // the one J passes to: a bright box with its number and a pointer down at it
           rect(s.x - 9, s.y - 10, 18, 12, "black");
@@ -1988,6 +2027,33 @@ export class LiveView {
       if (this.menu) this.drawMenu(rect, text);
       else if (g.solo && performance.now() < this.sideUntil && g.poss === 0) this.drawSidePlays(rect, text);
     }
+  }
+
+  /** A teammate worth passing to right now: a finisher by the rim (an oop), open behind the arc, or cutting to the
+   *  rim with nobody near. */
+  private wantsBall(pl: Player) {
+    const g = this.g, you = g.players[g.control], hoop = hoopOf(pl.side), dh = dist(pl, hoop);
+    const room = Math.min(...g.players.filter((d) => d.side !== pl.side).map((d) => dist(d, pl)));
+    if (room < LIVE.ballCallRoom) return 0; // only when wide open
+    const oop = dh < LIVE.oopRange && pl.p.attrs.finishing >= LIVE.oopFinishing && dist(you, pl) < LIVE.oopPassMax;
+    const three = dh >= COURT.three && pl.p.attrs.shooting >= 60;
+    const cut = towardHoop(pl) > 2.5 && dh < 6;
+    return oop || three || cut ? room : 0;
+  }
+
+  /** Who's calling for it: one teammate at a time, the most open (the one already calling keeps it while he's still
+   *  wide open, so it doesn't flicker between two). -1: nobody. */
+  private pickCaller() {
+    const g = this.g;
+    if (g.size < 2 || g.ball.holder !== g.control || g.ball.flight) return (this.ballCaller = -1);
+    const mates = g.players.filter((p) => p.side === 0 && p.i !== g.control);
+    if (this.ballCaller >= 0 && mates.some((p) => p.i === this.ballCaller && this.wantsBall(p))) return this.ballCaller;
+    let best = -1, bestRoom = 0;
+    for (const p of mates) {
+      const room = this.wantsBall(p);
+      if (room > bestRoom) (best = p.i), (bestRoom = room);
+    }
+    return (this.ballCaller = best);
   }
 
   /** Streetball: CHECK UP! slams in big, with the key to press under it (yours to start, or to hand it to them). */

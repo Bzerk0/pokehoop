@@ -134,6 +134,12 @@ export class Tutorial {
       g.dead = 0;
       (this.step.setup ?? ((g2: Game) => ready(g2, 8)))(g);
     }
+    // the defence step: they scored, so you'd inbound it (and get the ball "back"): that's a fail, try again
+    if (this.step.cpu && (events.some((e) => e.kind === "make" && e.side === 1) || (g.dead > 0 && g.next === 0))) {
+      g.dead = 0;
+      this.begin();
+      return null;
+    }
     const you = this.g.players[this.g.control];
     this.t += dt;
     this.moved += dist(you, this.last);

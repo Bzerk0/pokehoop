@@ -215,7 +215,8 @@ export function Cabinet3D({ children, front, screenTop, stageH, whole = false }:
       el.style.transform = pose(st.yaw, st.pitch, true, cam.current);
     }
     getComputedStyle(el).transform; // flush the current pose so the change below animates
-    el.style.transition = reduce ? "none" : `transform ${SETTLE_MS}ms ease-in-out`;
+    // to the screen it speeds up all the way in (a slam); back out to the room it eases
+    el.style.transition = reduce ? "none" : `transform ${SETTLE_MS}ms ${front ? "cubic-bezier(0.6, 0, 1, 0.5)" : "ease-in-out"}`;
     if (front) {
       el.style.transform = FRONT;
       return;

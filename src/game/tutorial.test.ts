@@ -17,6 +17,19 @@ const away = { name: "CPU", ids: ids(["alakazam", "scizor", "infernape", "tyrani
 const DT = 1 / 60;
 
 describe("HOW TO PLAY", () => {
+  it("in DEFEND, them scoring is a try-again, not the end of the lesson", () => {
+    const g = lineupGame(home, away, dex, 3, 1, true);
+    const tu = new Tutorial(g);
+    while (tu.step?.title !== "DEFEND") (tu as unknown as { i: number }).i++;
+    tu.step.setup?.(g);
+    g.dead = 0.5; // they scored: you'd inbound it next
+    g.next = 0;
+    expect(tu.update(DT, [{ kind: "make", side: 1, text: "SCORE!" }])).toBeNull();
+    expect(tu.finished).toBe(false);
+    expect(tu.step?.title).toBe("DEFEND");
+    expect(g.players[g.ball.holder!].side).toBe(1); // their ball again, for another go
+  });
+
   it("never gets stuck when the standing-still CPU ends up with the ball (a make or their rebound)", () => {
     const g = lineupGame(home, away, dex, 3, 1, true);
     const tu = new Tutorial(g);

@@ -7,6 +7,7 @@ import type { RatedPokemon } from "../../core/types.ts";
 import type { LiveView } from "../../game/LiveView.ts";
 import { BALL_SIZE, BALL_URL } from "../art/ballLogo.ts";
 import { ArcadeCabinet } from "../components/ArcadeCabinet.tsx";
+import { reducedMotion, SETTLE_MS } from "../components/Cabinet3D.tsx";
 import { teamColor } from "../components/LineupCard.tsx";
 import { Arrow } from "../components/Arrow.tsx";
 import { useRated } from "../data.ts";
@@ -21,10 +22,11 @@ import { usePortraitTouch } from "../touch.ts";
 export function Title() {
   const navigate = useNavigate();
   const location = useLocation();
-  // cabinet: the 3D arcade; coin: zoomed in on the screen, INSERT COIN; menu: the coin is in
-  const [stage, setStage] = useState<"cabinet" | "coin" | "menu">(location.state?.menu ? "menu" : "cabinet");
-  // the title theme (muffled while you're looking at the cabinet from across the room), the menu music once in
-  useMusic(stage === "menu" ? "menu" : "title", stage === "cabinet");
+  // cabinet: the 3D arcade, INSERT COIN; menu: the coin's in and it's slammed in on the screen
+  const [stage, setStage] = useState<"cabinet" | "menu">(location.state?.menu ? "menu" : "cabinet");
+  const [ready, setReady] = useState(stage === "menu"); // the slam-in has landed: the buttons show
+  useMusic("title", stage === "cabinet");
+  // the title theme: muffled while you're looking at the cabinet from across the room, clear once you're in
   const [message, setMessage] = useState("");
   const [host, setHost] = useState<HTMLDivElement | null>(null); // the cabinet remounts the screen when it changes view
   const { data } = useRated();
@@ -70,25 +72,26 @@ export function Title() {
         e.preventDefault();
         press();
       }
-      else if (e.key === "Escape" && stage === "coin") setStage("cabinet"); // step back out to the cabinet
     };
     window.addEventListener("keydown", start);
     return () => window.removeEventListener("keydown", start);
   }, [stage]);
 
-  /** The first press walks up to the cabinet (zooms in on the screen); the next one drops the coin
-   *  and opens the menu. */
+  /** A press on the cabinet drops the coin and slams in on the screen; the menu shows once it lands. */
   function press() {
-    if (stage === "cabinet") return setStage("coin");
+    if (stage !== "cabinet") return;
     coin();
+    setReady(false);
     setStage("menu");
+    setTimeout(() => setReady(true), reducedMotion() ? 0 : SETTLE_MS);
   }
 
   // the menu: two big buttons (PLAY, DRAFT) side by side, two small ones (ABOUT, POKéDEX) stacked under them
   const items = [
     { label: "PLAY", onSelect: () => navigate("/play", { state: { starters: five.map((p) => p.id) } }) },
     { label: "DRAFT", onSelect: () => navigate("/draft") },
-    { label: "ABOUT", onSelect: () => setMessage("A free fan-made hoops game, created by Hudson Bjerkness. Pokémon data and sprites come from PokéAPI.") },
+    // (ABOUT again closes it)
+    { label: "ABOUT", onSelect: () => setMessage((m) => (m ? "" : "A free fan-made hoops game, created by Hudson Bjerkness. Pokémon data and sprites come from PokéAPI.")) },
     { label: "POKéDEX", onSelect: () => navigate("/dex") },
   ];
   const [pick, setPick] = useState(0);
@@ -96,7 +99,7 @@ export function Title() {
 
   // arrows move (left/right between the big two, down to the small ones), Enter/Space picks, Esc steps back
   useEffect(() => {
-    if (stage !== "menu") return;
+    if (stage !== "menu" || !ready) return;
     const MOVES: Record<string, number[]> = portrait
       ? { ArrowDown: [1, 2, 3, 3], ArrowUp: [0, 0, 1, 2] } // portrait: one column
       : { ArrowLeft: [1, 0, 2, 3], ArrowRight: [1, 0, 2, 3], ArrowDown: [2, 2, 3, 3], ArrowUp: [0, 1, 0, 2] };
@@ -109,7 +112,7 @@ export function Title() {
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         choose(pick);
-      } else if (e.key === "Escape") (backBlip(), setStage("coin"));
+      } else if (e.key === "Escape") (backBlip(), setMessage(""), setStage("cabinet"));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -119,7 +122,7 @@ export function Title() {
   const button = (i: number, cls: string, size: number) => (
     <button
       key={i}
-      className={`absolute flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
+      className={`pop absolute flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
       style={{ fontSize: size, boxShadow: `4px 4px 0 ${PALETTE.black}` }}
       onMouseEnter={() => pick !== i && (moveBlip(), setPick(i))}
       onClick={() => choose(i)}
@@ -163,11 +166,11 @@ export function Title() {
   );
 
   // portrait, coin in: a menu filling the whole screen, the big plays playing behind it cropped to fill
-  if (portrait && stage === "menu") {
+  if (portrait && stage === "menu" && ready) {
     const stacked = (i: number, cls: string, size: number) => (
       <button
         key={i}
-        className={`flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
+        className={`pop flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
         style={{ fontSize: size, boxShadow: `4px 4px 0 ${PALETTE.black}` }}
         onClick={() => (setPick(i), choose(i))}
       >
@@ -176,7 +179,7 @@ export function Title() {
       </button>
     );
     return (
-      <div className="relative h-full w-full overflow-hidden bg-black">
+      <div className="screen-slam relative h-full w-full overflow-hidden bg-black">
         <div ref={setHost} className="absolute inset-0 [&_canvas]:!h-full [&_canvas]:!w-full [&_canvas]:object-cover" />
         <div className="pointer-events-none absolute inset-0 bg-black/40" />
         {/* (a phone's narrower than the logo: a bit smaller) */}
@@ -199,7 +202,7 @@ export function Title() {
 
   return (
     <ArcadeCabinet view={stage === "cabinet" ? "3d" : "flat"} portrait={portrait}>
-      <div className="absolute inset-0 overflow-hidden bg-black" onClick={() => stage !== "menu" && press()}>
+      <div className="absolute inset-0 overflow-hidden bg-black" onClick={() => stage === "cabinet" && press()}>
         <div ref={setHost} className="absolute inset-0" />
         {logo}
 
@@ -207,7 +210,7 @@ export function Title() {
           <div className="blink absolute bottom-[24px] left-0 right-0 text-center font-head text-[16px] text-white" style={{ textShadow: `2px 2px 0 ${PALETTE.black}, 4px 4px 0 ${PALETTE.red}` }}>
             INSERT COIN
           </div>
-        ) : (
+        ) : !ready ? null : (
           <>
             {button(0, "left-[118px] top-[138px] h-[76px] w-[194px]", 24)}
             {button(1, "left-[330px] top-[138px] h-[76px] w-[194px]", 24)}

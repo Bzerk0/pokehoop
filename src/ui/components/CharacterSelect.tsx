@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { SLOTS, slotOvr, slotPosition, STARTERS, type Lineup } from "../../core/lineup.ts";
+import { isEligible, SLOTS, slotOvr, slotPosition, STARTERS, type Lineup } from "../../core/lineup.ts";
 import type { RatedPokemon } from "../../core/types.ts";
 import { backBlip, moveBlip, selectBlip } from "../sound.ts";
 import { PALETTE } from "../theme/palette.ts";
@@ -8,6 +8,7 @@ import { teamColor } from "./LineupCard.tsx";
 import { DexBrowser } from "./DexBrowser.tsx";
 import { PlayerModal, StatsButton } from "./Modal.tsx";
 import { Sprite } from "./PlayerCard.tsx";
+import { RandomPicker } from "./RandomPicker.tsx";
 
 type Team = { key: string; label: string; lineup: Lineup; ready: boolean };
 const MODE = { 1: "ONES", 3: "THREES", 5: "FIVES" } as const;
@@ -27,6 +28,7 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
 }) {
   const [picks, setPicks] = useState<number[]>([]);
   const [stats, setStats] = useState<RatedPokemon | null>(null);
+  const [random, setRandom] = useState(false); // the slot machine is up
   useEffect(() => setPicks([]), [team]);
   const lineup = teams[team].lineup;
   const full = picks.length === size;
@@ -34,13 +36,13 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (stats) return; // the stats window takes Esc and Enter first
+      if (stats || random) return; // the stats window and the slot machine take Esc and Enter first
       if (e.key === "Escape") (e.stopImmediatePropagation(), backBlip(), onBack());
       else if (e.key === "Enter" && full && !(e.target instanceof HTMLInputElement)) (selectBlip(), onStart(picks));
     };
     window.addEventListener("keydown", onKey, true); // before the Play page's own Esc handler
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [full, picks, onBack, onStart, stats]);
+  }, [full, picks, onBack, onStart, stats, random]);
 
   const toggle = (id: number) => {
     moveBlip();
@@ -52,6 +54,8 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
   };
 
   const all = useMemo(() => [...dex.values()], [dex]);
+  // RANDOM draws from whoever your team's mode allows (no legendaries in a Classic team)
+  const randomPool = useMemo(() => all.filter((p) => isEligible(p, lineup.mode)), [all, lineup.mode]);
 
   /** Over a picked Pokémon: a grey layer with its pick number and how many are picked; once enough are, PLAY.
    *  Clicking the layer unpicks it. */
@@ -114,6 +118,9 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
           {solo ? "SOLO: CHOOSE YOUR POKÉMON" : `${MODE[size]}: CHOOSE ${size} (${picks.length}/${size})`}
         </h2>
         <button className="px-btn" onClick={() => (backBlip(), onBack())}><Arrow left /> BACK</button>
+        <button className="px-btn" onClick={() => (selectBlip(), setRandom(true))} title="Spin the slot machine for your players">
+          RANDOM <Arrow />
+        </button>
         {size === 5 && !solo && (
           <button className="px-btn" onClick={() => (selectBlip(), onStart())} title="Your starting five, with the bench to sub in">
             ENTIRE TEAM <Arrow />
@@ -159,6 +166,7 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
         />
       </div>
       {stats && <PlayerModal p={stats} onClose={() => setStats(null)} />}
+      {random && <RandomPicker size={size} pool={randomPool} onClose={() => setRandom(false)} onUse={(ids) => (setPicks(ids), setRandom(false))} />}
     </div>
   );
 }

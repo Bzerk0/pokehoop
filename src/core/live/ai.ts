@@ -12,7 +12,7 @@ import {
   callPlay, callScheme, COURT, courtwards, dist, farOut, handlerOf, hoopOf, NO_INPUT, other, reachOf, spotOf, team, towardHoop,
   type Game, type Input, type Player, type Side,
 } from "./game.ts";
-import { ovrOf, PLAY, PLAYS, playWeights, ZONE, ZONE3, type PlayName, type SchemeName, type Spot } from "./plays.ts";
+import { ovrOf, PLAY, PLAYS, playWeights, SCHEMES, ZONE, ZONE3, type PlayName, type SchemeName, type Spot } from "./plays.ts";
 
 export type AiLevel = (typeof LIVE_AI)[keyof typeof LIVE_AI];
 
@@ -208,7 +208,7 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
 
       // driving at the rim with a man close: now and then a floater a few metres out (a quick tap) or a eurostep
       const traffic = gap < 2.5 && towardHoop(me) > LIVE.driveSpeed;
-      if (traffic && d > 2.5 && d < 4.5 && g.rng.next() < LIVE.floaterAi * st.drive * dt) {
+      if (traffic && d > LIVE.layupRange + 0.3 && d < LIVE.floaterRange - 0.1 && g.rng.next() < LIVE.floaterAi * st.drive * dt) {
         release = 0;
         inp.shoot = true;
         holdT = 0;
@@ -508,12 +508,26 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
  *  man. Call it once per step for the CPU side. */
 export function makeCoach(side: Side) {
   let lastPoss: Side | null = null, called = false;
+  // what each defence has given up so far: trips and points (the bench learns what isn't working)
+  const record: Partial<Record<SchemeName, { trips: number; pts: number }>> = {};
+  let defending: SchemeName | null = null, theirsAt = 0;
   return (g: Game) => {
     if (g.size === 1) return;
     if (g.poss !== lastPoss) {
+      // a defensive trip just ended: how did that scheme do?
+      if (defending && lastPoss === other(side)) {
+        const r = (record[defending] ??= { trips: 0, pts: 0 });
+        r.trips++;
+        r.pts += g.score[other(side)] - theirsAt;
+      }
       lastPoss = g.poss;
       called = false;
-      if (g.poss !== side) callScheme(g, side, pickScheme(g, side));
+      defending = null;
+      if (g.poss !== side) {
+        defending = adapt(pickScheme(g, side), record);
+        callScheme(g, side, defending);
+        theirsAt = g.score[other(side)];
+      }
     }
     if (g.poss !== side || called) return;
     const h = handlerOf(g);
@@ -530,6 +544,18 @@ export function makeCoach(side: Side) {
       }
     }
   };
+}
+
+/** The bench's pick, unless it's been tried enough and keeps getting scored on: then the scheme that's given up the
+ *  fewest points a trip (one not tried yet counts as average, a point a trip). */
+export function adapt(pick: SchemeName, record: Partial<Record<SchemeName, { trips: number; pts: number }>>): SchemeName {
+  const ppp = (s: SchemeName) => {
+    const r = record[s];
+    return r && r.trips ? r.pts / r.trips : 1;
+  };
+  const r = record[pick];
+  if (!r || r.trips < LIVE.coachLearnAfter || ppp(pick) < LIVE.coachBadPpp) return pick;
+  return SCHEMES.filter((s) => s !== pick).reduce((best, s) => (ppp(s) < ppp(best) ? s : best));
 }
 
 function pickScheme(g: Game, side: Side): SchemeName {

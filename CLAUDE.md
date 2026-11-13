@@ -106,6 +106,35 @@
   (four stacked buttons, the clips stretched to cover behind them). Turn-sideways screens have a BACK button; on
   iPhone the pause menu's HIDE ADDRESS BAR brings the scroll-to-start screen back (`useScrollToStart` returns
   [waiting, again]).
+- Batch (tutorial/mobile/defence): DEFEND in HOW TO PLAY restarts if they score (it used to count your inbound as
+  a steal and end the lesson). Menu music unlocks on touchend/click too (iOS; `Music.blocked`). Touch screens can't
+  select the page (index.css, pointer coarse). HIDE ADDRESS BAR keeps the pause; the scroll-lock is off on the results
+  (`useScrollToStart(active)`). Touch buttons read the game (`LiveView.touchState`): SCREEN is STEAL and SHOOT is JUMP
+  on defence; SHOOT/PASS flash in your eurostep, and a press there calls its finish (`pl.euroCall`: shoot = layup
+  even smothered, pass = a dish to the open man; no call = the old auto pick). iPad (shorter side ≥ 700 px): controls
+  1.35× and higher. `floaterRange` 3.6; an oop needs a pass under `oopPassMax` (12 m). The CPU coach keeps a points-per-
+  trip record per scheme and drops one that's had `coachLearnAfter` trips at `coachBadPpp`+ (`adapt` in ai.ts). DUNKER
+  SPOT play (big on the baseline beside the lane). BALL! BALL! over a CPU teammate you could hit (oop / open three /
+  open cut; `wantsBall`). Dunk and oop clips have three camera looks each (picked from the clip's start; oop clips carry
+  `oop` and the passer in `aux`: the Wade-to-LeBron look is from behind the passer). The top-plays reel plays the title
+  song, and every mode but the practice ends on the full Results (1v1's box has one GAME column).
+- The Play flow (PlayPage) is three steps: GAME MODE (`ModeSelect.tsx`: only big mode cards, each with a mini court;
+  HOW TO PLAY is a small button), CHARACTER SELECT (`CharacterSelect.tsx`; RANDOM opens `RandomPicker.tsx`, the gold
+  slot machine over the screen: one reel per pick from the Pokémon your team's mode allows, stop one by one, USE THESE /
+  SPIN AGAIN / CANCEL; the machine's parts live in `slotParts.tsx`, shared with the draft), then OPPONENT
+  (`OpponentSelect.tsx`: a ready-made team / trio / single opponent by game size at the top, `presetPicks` in cpuTeam.ts
+  mirroring lineupGame's default slots (a test keeps them equal), difficulty, NEW OPPONENT, START, SIM GAME (FIVES) and
+  the Pokédex under it for your own picks; your picks come first and the ready-made fill the rest). PlayPage state:
+  `selecting` (mode), `chosen` (your players, or "team"), `oppPicks`. The opponent you chose goes to the game as
+  `awayPicks` (lineupGame's new last parameter) with its eight reordered; PRE-GAME from a game comes back to the
+  opponent select (ArcadeSetup `back`: `chosen`, `oppPicks`). Esc steps back one step.
+- Latest tweaks: the Play page's difficulty buttons and NEW OPPONENT live in the opponent's column (above the CPU lineup
+  on desktop, below it on a phone: flex `order`). The score card after a live game plays the menu song (ArcadePage
+  `useMusic(final?.result ? "menu" : null)`); box scores leave off players who never played or did anything (`played`
+  in PlayPage). The title plays the title song, muffled on the cabinet and clear on the menu; the cabinet-to-menu
+  zoom has the bump but no white flash. The shot clock is a flat two-faced panel on the backboard (a sprite always
+  faced the camera). BALL! BALL!: one caller at a time (`pickCaller`), only a teammate with `LIVE.ballCallRoom` (4.5 m)
+  of clear floor, and he keeps it while still open.
 - Screens on the run: with no play on, the ball handler running straight at a teammate standing still (within
   `LIVE.screenAsk`) makes him plant a screen there (ai.ts offBall), then roll. Court length: `LIVE.midCut` metres are
   taken out of the middle (COURT.l); hoops, arcs and spots are measured from the baselines, so only the running
@@ -124,7 +153,7 @@
   on fire / breakaway / base): `pl.dunkStyle` plus a move event like "360 DUNK!" (the release stays "DUNK").
 - Title screen (test): attract mode. `Title.tsx` runs a LiveView with `attract: true` (CPU-vs-CPU 5v5 fast-forwarded
   off screen, each spotted clip shown through the replay cameras; no HUD, sound or keys) under the logo; INSERT COIN
-  (Enter/Space/click: the first press zooms in from the cabinet, the next drops the coin) opens the menu: big PLAY and DRAFT buttons, small ABOUT and POKéDEX under them (arrows move, Esc steps back), a fan-game notice along the bottom; Free Build is reached from the draft and Play pages. The previous title (arena + flaming-ball PRESS START) is
+  (Enter/Space/click: one press drops the coin, plays its sound and slams in on the screen: the 3D zoom speeds up all the way in, then the flat screen lands with a stepped bump and a white flash, `.screen-slam`/`.slam-flash`, and the buttons pop in) opens the menu (ABOUT again closes its box; Esc goes back to the cabinet): big PLAY and DRAFT buttons, small ABOUT and POKéDEX under them (arrows move, Esc steps back), a fan-game notice along the bottom; Free Build is reached from the draft and Play pages. The previous title (arena + flaming-ball PRESS START) is
   `OldTitle.tsx`, unrouted: route "/" to it in App.tsx to switch back.
 - Credits: anything someone else made goes in `src/ui/credits.ts` (for the Phase 10 About page). Sound files live in
   `public/sfx/` (the coin: Alex_Jauk on Pixabay, bitcrushed with ffmpeg `acrusher`); everything else is made in code.

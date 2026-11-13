@@ -80,6 +80,7 @@ export type Player = {
   streak: number; // straight makes (a miss or a sub resets it)
   onFire: boolean; // ON FIRE: bigger green zone, endless turbo, until the other team scores
   euro: number; // a eurostep ("cross" act): the first plant's side (±1), the second goes back across; 0 = not one
+  euroCall: "shoot" | "pass" | null; // pressed during the eurostep: how it finishes (null: the game picks)
   dunkStyle: DunkStyle | null; // this dunk is a special one (null: a plain slam); cleared on landing
 };
 
@@ -245,7 +246,7 @@ function player(i: number, side: Side, slot: number, p: RatedPokemon, x: number,
     i, r: slot, home: slot, sprinting: false,
     side, slot, p, x, y, z: 0, vx: 0, vy: 0, vz: 0, fx: 0, fy: side === 0 ? 1 : -1, turbo: 1, act: "free", actT: 0,
     crossCool: 0, stealCool: 0, held: false, wind: 0, dunkFrom: null, dunkTested: [], screening: false, slow: 0,
-    screenedAt: -Infinity, streak: 0, onFire: false, doubled: false, euro: 0, dunkStyle: null,
+    screenedAt: -Infinity, streak: 0, onFire: false, doubled: false, euro: 0, euroCall: null, dunkStyle: null,
   };
 }
 
@@ -293,7 +294,7 @@ export function newGame(you: RatedPokemon[], cpu: RatedPokemon[], seed: number, 
  *  best starter; everyone else is on the bench. Team games are timed (4 quarters, fatigue, subs); 1v1 is first to 11. */
 export function lineupGame(
   home: { name: string; ids: (number | null)[] }, away: { name: string; ids: (number | null)[] },
-  dex: Map<number, RatedPokemon>, size: 1 | 3 | 5, seed: number, practice = false, homePicks?: number[], half = false,
+  dex: Map<number, RatedPokemon>, size: 1 | 3 | 5, seed: number, practice = false, homePicks?: number[], half = false, awayPicks?: number[],
 ) {
   // homePicks: the lineup slots you chose on the select screen (in your order); the rest of the team is the bench
   const pick = (ids: (number | null)[], chosen?: number[]) => {
@@ -302,7 +303,7 @@ export function lineupGame(
     const slots = valid ? chosen! : size === 5 ? [0, 1, 2, 3, 4] : size === 3 ? [0, 2, 4] : [all.slice(0, 5).reduce((x, y) => (ovrOf(y.p) > ovrOf(x.p) ? y : x)).slot];
     return { court: slots.map((s) => all[s].p), slots, bench: size === 1 ? [] : all.filter((e) => !slots.includes(e.slot)) };
   };
-  const h = pick(home.ids, homePicks), a2 = pick(away.ids);
+  const h = pick(home.ids, homePicks), a2 = pick(away.ids, awayPicks); // (awayPicks: the opponent you chose)
   return newGame(h.court, a2.court, seed, {
     timed: size > 1 && !practice, practice, names: [home.name || "YOU", away.name || "CPU"],
     youSlots: h.slots, cpuSlots: a2.slots, youBench: h.bench, cpuBench: a2.bench, half,
@@ -583,14 +584,18 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
         const lat = (pl.actT > LIVE.euroTime / 2 ? pl.euro : -pl.euro) * 0.75, on = Math.min(1, hd / 2) * 0.7, sp = speedOf(pl);
         pl.vx = (ux * on - uy * lat) * sp;
         pl.vy = (uy * on + ux * lat) * sp;
+        // your call while it happens: shoot it or pass it out
+        if (hasBall && pressed) pl.euroCall = "shoot";
+        else if (hasBall && (inp.steal || inp.passTo != null)) pl.euroCall = "pass";
       }
       if (pl.actT <= 0) {
-        const finish = pl.euro !== 0 && hasBall;
+        const finish = pl.euro !== 0 && hasBall, call = pl.euroCall;
         pl.act = "free";
         pl.euro = 0;
+        pl.euroCall = null;
         if (finish) {
-          // the eurostep's finish, no button needed: the layup, or (crowded) a dish to the open man
-          const hoop = hoopOf(pl.side), mate = euroDish(g, pl);
+          // the eurostep's finish: what you called, else the game's pick (the layup, or crowded, a dish to the open man)
+          const hoop = hoopOf(pl.side), mate = call === "shoot" ? null : euroDish(g, pl, call === "pass");
           if (mate) {
             emit(g, "move", pl.side, "DISH!", pl.i, mate.i);
             passBall(g, pl, mate);
@@ -721,7 +726,7 @@ export function passBall(g: Game, from: Player, to: Player) {
   g.ball.holder = null;
   // to a good finisher already near the rim (and not a hand-off): an alley-oop, lobbed to just above the rim, where the
   // receiver will be at the top of the leap
-  const hoop = hoopOf(to.side), oop = to.act === "free" && dist(to, hoop) < LIVE.oopRange && d > 2.5 && a(to).finishing >= LIVE.oopFinishing;
+  const hoop = hoopOf(to.side), oop = to.act === "free" && dist(to, hoop) < LIVE.oopRange && d > 2.5 && d < LIVE.oopPassMax && a(to).finishing >= LIVE.oopFinishing;
   if (oop) {
     const z1 = COURT.rimZ + LIVE.dunkApex;
     g.ball.flight = {
@@ -954,10 +959,10 @@ function crossover(g: Game, pl: Player, sx: number, sy: number) {
  *  second back across, still going forward (movePlayer's "cross" steers it). The man in front is caught leaning. */
 /** After a eurostep, in a team game: pass instead of shooting? The tighter the contest, the likelier, to the
  *  teammate with the most room (nearer the rim breaks a tie). Null: take the layup. */
-function euroDish(g: Game, pl: Player): Player | null {
+function euroDish(g: Game, pl: Player, called = false): Player | null {
   if (g.size === 1) return null;
   const { from, max } = LIVE.euroPass;
-  const chance = max * clamp((contestOn(g, pl) - from) / (1 - from), 0, 1);
+  const chance = called ? 1 : max * clamp((contestOn(g, pl) - from) / (1 - from), 0, 1);
   if (chance <= 0 || g.rng.next() >= chance) return null;
   const hoop = hoopOf(pl.side), room = (q: Player) => Math.min(...g.players.filter((d) => d.side !== q.side).map((d) => dist(d, q)));
   const mates = team(g, pl.side).filter((q) => q !== pl);

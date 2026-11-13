@@ -31,11 +31,11 @@ export function isIphoneBrowser() {
 /** TEST, iPhone only: the page gets room to scroll (the game stays pinned in place); the first scroll down tucks
  *  Safari's bars away, then scrolling locks. Returns whether it's still waiting for that scroll, and `again`, which
  *  brings the screen back (scrolled to the top, unlocked) for another go. */
-export function useScrollToStart(): [boolean, () => void] {
+export function useScrollToStart(active = true): [boolean, () => void] {
   const [waiting, setWaiting] = useState(isIphoneBrowser);
-  // room to scroll, the game pinned, for as long as the page is up
+  // room to scroll, the game pinned, while it's active (not on the results, which scroll)
   useEffect(() => {
-    if (!isIphoneBrowser()) return;
+    if (!isIphoneBrowser() || !active) return;
     const root = document.getElementById("root")!;
     const spacer = document.createElement("div");
     spacer.style.height = "200vh"; // something to scroll
@@ -46,10 +46,10 @@ export function useScrollToStart(): [boolean, () => void] {
       Object.assign(root.style, { position: "", inset: "", height: "" });
       window.scrollTo(0, 0);
     };
-  }, []);
+  }, [active]);
   // waiting: watch for the scroll (sideways only); done: no more scrolling
   useEffect(() => {
-    if (!isIphoneBrowser()) return;
+    if (!isIphoneBrowser() || !active) return;
     if (!waiting) {
       const lock = (e: TouchEvent) => e.preventDefault();
       document.addEventListener("touchmove", lock, { passive: false });
@@ -64,12 +64,12 @@ export function useScrollToStart(): [boolean, () => void] {
       clearInterval(poll);
       window.removeEventListener("scroll", onScroll);
     };
-  }, [waiting]);
+  }, [waiting, active]);
   const again = () => {
     window.scrollTo(0, 0);
     setWaiting(true);
   };
-  return [waiting, again];
+  return [active && waiting, again];
 }
 
 /** A phone or tablet held upright (the title has its own layout for it). */
