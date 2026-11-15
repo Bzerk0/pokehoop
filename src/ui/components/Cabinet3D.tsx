@@ -4,7 +4,7 @@
 // Coordinates: x right, y down, z toward you, in art pixels, with the screen's centre at (CAB_W / 2, SCREEN_CY, 0).
 // The whole model is shifted down to wherever the flat cabinet's screen is, so when the camera looks square-on at
 // the screen the two line up exactly.
-import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import { BALL_URL } from "../art/ballLogo.ts";
 import { PALETTE } from "../theme/palette.ts";
 import { Band, Bezel, CAB_W, DeckControls, Stripes } from "./cabinetParts.tsx";
@@ -59,6 +59,8 @@ const PERSPECTIVE = 1400;
 const VIEW = -12;
 const BASE_YAW = 24;
 const SWAY = 12; // degrees either side
+const SWAY_MS = 1800; // the sway's phase moves one radian in this many ms (a full swing there and back ≈ 11 s)
+const SWAY_SAMPLES = 48; // the sway animation's keyframes per swing (a sine, sampled)
 const SPIN_FRICTION = 0.997; // spin speed kept per millisecond after you let go (0.997 ≈ coasts about a second)
 const FILL = 0.94; // the top half fills this much of the stage's height
 export const SETTLE_MS = 700;
@@ -186,6 +188,85 @@ function SidePanel({ side }: { side: "left" | "right" }) {
   );
 }
 
+// The cabinet's panels other than the screen never change: memo keeps React from redoing them on every press (the
+// coin press re-rendered the whole cabinet, ~33 ms, just as the zoom began).
+
+/** The floor, the top, back and sides, the marquee and the speaker panel. */
+const CabinetBack = memo(function CabinetBack() {
+  return (
+    <>
+      <Face x={-100} y={FLOOR_Y + 1} z={BACK_Z - 100} turn="rotateX(90deg)" w={CAB_W + 200} h={CP_FRONT.z - BACK_Z + 260} className="bg-night">
+        <div className="absolute bg-black" style={{ left: 100, top: 100, width: CAB_W, height: BODY_Z - BACK_Z }} />
+      </Face>
+
+      <Face y={TOP_Y} z={BACK_Z} turn="rotateX(90deg)" w={CAB_W} h={MARQUEE.z - BACK_Z} className="border-2 border-black bg-slate" />
+      <Face x={CAB_W} y={TOP_Y} z={BACK_Z} turn="rotateY(180deg)" w={CAB_W} h={SIDE_H} className="border-2 border-black bg-night" />
+      <Face y={TOP_Y} z={BACK_Z} turn="rotateY(-90deg)" w={SIDE_W} h={SIDE_H}>
+        <SidePanel side="left" />
+      </Face>
+      <Face x={CAB_W} y={TOP_Y} z={CP_FRONT.z} turn="rotateY(90deg)" w={SIDE_W} h={SIDE_H}>
+        <SidePanel side="right" />
+      </Face>
+
+      {/* marquee: a tall lit sign */}
+      <Face y={TOP_Y} z={MARQUEE.z} w={CAB_W} h={MARQUEE.y - TOP_Y} className="overflow-hidden bg-navy">
+        <Stripes height={MARQUEE.y - TOP_Y} />
+        <div
+          className="absolute flex items-center justify-center gap-6 border-4 border-gold bg-black"
+          style={{ left: 28, top: 14, right: 28, bottom: 14, boxShadow: `0 0 0 2px ${PALETTE.black}` }}
+        >
+          <img src={BALL_URL} width={64} height={64} alt="" />
+          <span className="font-head text-[32px] text-gold" style={{ textShadow: `3px 3px 0 ${PALETTE.red}` }}>
+            {GAME_NAME}
+          </span>
+          <img src={BALL_URL} width={64} height={64} alt="" />
+        </div>
+      </Face>
+
+      {/* speaker panel, sloping back under the marquee */}
+      <Face y={SPEAKER.y} z={SPEAKER.z} turn={`rotateX(${SPEAKER.deg}deg)`} w={CAB_W} h={SPEAKER.h} className="overflow-hidden border-2 border-black bg-night">
+        <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-[160px]">
+          {[0, 1].map((i) => (
+            <div key={i} className="grid grid-cols-6 gap-[6px]">
+              {Array.from({ length: 18 }, (_, j) => <div key={j} className="h-[6px] w-[6px] bg-black" />)}
+            </div>
+          ))}
+        </div>
+      </Face>
+    </>
+  );
+});
+
+/** The control panel (top and front face) and the lower body. */
+const CabinetFront = memo(function CabinetFront() {
+  return (
+    <>
+      {/* control panel box: top with the stick and buttons, and its front face */}
+      <Face y={CP_TOP.y} z={CP_TOP.z} turn={`rotateX(${CP_TOP.deg}deg)`} w={CAB_W} h={CP_TOP.h} className="border-2 border-black bg-slate" style={{ transformStyle: "preserve-3d" }}>
+        <div className="absolute left-[10px] right-[10px] h-[52px]" style={{ top: (CP_TOP.h - 52) / 2, transformStyle: "preserve-3d" }}>
+          <DeckControls stickStyle={{ transformOrigin: "50% 100%", transform: `rotateX(${-CP_TOP.deg}deg)` }} />
+        </div>
+      </Face>
+      <Face y={CP_FACE.y} z={CP_FACE.z} turn={`rotateX(${CP_FACE.deg}deg)`} w={CAB_W} h={CP_FACE.h} className="flex items-center justify-center overflow-hidden border-2 border-black bg-navy">
+        <div className="absolute inset-x-0 top-0 h-[6px] bg-red" />
+        <span className="font-head text-[24px] text-gold" style={{ textShadow: `2px 2px 0 ${PALETTE.red}` }}>{GAME_NAME}</span>
+      </Face>
+
+      {/* lower body, under the control panel */}
+      <Face y={CP_LIP.y} z={BODY_Z} w={CAB_W} h={FLOOR_Y - CP_LIP.y} className="overflow-hidden bg-navy">
+        <Stripes height={FLOOR_Y} />
+        <img src={BALL_URL} width={128} height={128} alt="" className="absolute left-1/2 top-[110px] -translate-x-1/2" />
+        <div className="absolute left-1/2 top-[268px] -translate-x-1/2 border-2 border-black bg-night px-3 py-2 font-head text-[10px] text-gold">
+          FREE PLAY
+        </div>
+        <div className="absolute inset-x-0 bottom-[44px] h-[6px] bg-orange" />
+        <div className="absolute inset-x-0 bottom-[36px] h-[4px] bg-gold" />
+        <div className="absolute inset-x-0 bottom-0 h-[36px] bg-black" />
+      </Face>
+    </>
+  );
+});
+
 /**
  * Drawn on a stage the width of the screen panel (CAB_W wide, stageH tall); the cabinet spills past it.
  * front: square-on to the screen, which then lands exactly on the flat screen's spot (top screenTop).
@@ -196,23 +277,70 @@ export function Cabinet3D({ children, front, screenTop, stageH, whole = false }:
   whole?: boolean; // frame the whole cabinet, not just its top half (portrait)
 }) {
   const rig = useRef<HTMLDivElement>(null);
-  const st = useRef({ yaw: BASE_YAW, base: BASE_YAW, pitch: VIEW, phase: 0, dragging: false, moved: 0, vel: 0 }).current;
+  const st = useRef({
+    yaw: BASE_YAW, base: BASE_YAW, pitch: VIEW, phase: 0, dragging: false, moved: 0, vel: 0,
+    sway: null as Animation | null, phase0: 0, // the sway animation running, and the phase it started from
+    raf: 0, // a flick coasting to a stop
+    front, // facing you (a drag let go after that mustn't coast)
+  }).current;
   const shift = screenTop - SCREEN_Y;
   const cam = useRef<Framing>(null!);
   const framed = useMemo(() => framing(stageH, shift, whole), [stageH, shift, whole]);
   cam.current = framed;
 
+  const place = () => (rig.current!.style.transform = pose(st.yaw, st.pitch, true, cam.current));
+  /** Sway as a browser animation (a sine, sampled): it runs off the page's script, so it stays smooth while the page
+   *  is busy (loading, building the game), where a sway moved by script froze with every hitch. */
+  const swing = () => {
+    stopSwing();
+    place();
+    if (reducedMotion()) return;
+    st.phase0 = st.phase;
+    const frames = Array.from({ length: SWAY_SAMPLES + 1 }, (_, k) => {
+      const yaw = st.base + SWAY * Math.sin(st.phase + (2 * Math.PI * k) / SWAY_SAMPLES);
+      return { transform: pose(yaw, st.pitch, true, cam.current) };
+    });
+    st.sway = rig.current!.animate(frames, { duration: 2 * Math.PI * SWAY_MS, iterations: Infinity });
+  };
+  /** Stop the sway where it is (it's being grabbed, or turning to face you): its pose back into st. */
+  const stopSwing = () => {
+    if (!st.sway) return;
+    st.phase = st.phase0 + Number(st.sway.currentTime ?? 0) / SWAY_MS;
+    st.yaw = st.base + SWAY * Math.sin(st.phase);
+    place();
+    st.sway.cancel();
+    st.sway = null;
+  };
+  /** A flick: spin on and slow down (by script), then sway again. */
+  const coast = () => {
+    let last = 0;
+    const tick = (t: number) => {
+      const dt = last ? t - last : 0;
+      last = t;
+      st.base += st.vel * dt;
+      st.vel = Math.abs(st.vel) < 0.001 ? 0 : st.vel * SPIN_FRICTION ** dt;
+      st.phase += dt / SWAY_MS;
+      st.yaw = st.base + SWAY * Math.sin(st.phase);
+      place();
+      if (st.vel) st.raf = requestAnimationFrame(tick);
+      else (st.raf = 0, swing());
+    };
+    st.raf = requestAnimationFrame(tick);
+  };
+
   useEffect(() => {
     const el = rig.current!;
     const reduce = reducedMotion();
+    st.front = front;
     if (front) {
+      stopSwing();
       st.vel = 0;
       // after a few spins, take the short way round to face you
       const turns = Math.round(st.yaw / 360) * 360;
       st.yaw -= turns;
       st.base -= turns;
       el.style.transition = "none";
-      el.style.transform = pose(st.yaw, st.pitch, true, cam.current);
+      place();
     }
     getComputedStyle(el).transform; // flush the current pose so the change below animates
     // to the screen it speeds up all the way in (a slam); back out to the room it eases
@@ -221,33 +349,29 @@ export function Cabinet3D({ children, front, screenTop, stageH, whole = false }:
       el.style.transform = FRONT;
       return;
     }
-    el.style.transform = pose(st.yaw, st.pitch, true, cam.current);
-    let raf = 0, last = 0;
-    const sway = setTimeout(() => {
+    place();
+    const settle = setTimeout(() => {
       el.style.transition = "none";
-      const tick = (t: number) => {
-        const dt = last ? t - last : 0;
-        last = t;
-        if (!st.dragging && !reduce) {
-          // inertia: a flick keeps spinning and slows down
-          st.base += st.vel * dt;
-          st.vel = Math.abs(st.vel) < 0.001 ? 0 : st.vel * SPIN_FRICTION ** dt;
-          st.phase += dt / 1800;
-          st.yaw = st.base + SWAY * Math.sin(st.phase);
-        }
-        el.style.transform = pose(st.yaw, st.pitch, true, cam.current);
-        raf = requestAnimationFrame(tick);
-      };
-      raf = requestAnimationFrame(tick);
+      if (!st.dragging && !st.raf) swing();
     }, reduce ? 0 : SETTLE_MS);
     return () => {
-      clearTimeout(sway);
-      cancelAnimationFrame(raf);
+      clearTimeout(settle);
+      cancelAnimationFrame(st.raf);
+      st.raf = 0;
     };
   }, [front, st]);
 
+  // a new window size frames it differently: the sway starts over from where it is with the new framing
+  useEffect(() => {
+    if (st.sway) swing();
+  }, [framed]);
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (front) return;
+    stopSwing();
+    cancelAnimationFrame(st.raf);
+    st.raf = 0;
+    rig.current!.style.transition = "none"; // follow the drag at once, even mid-settle
     st.dragging = true;
     st.moved = 0;
     st.vel = 0; // grabbing it stops a spin
@@ -262,6 +386,7 @@ export function Cabinet3D({ children, front, screenTop, stageH, whole = false }:
       st.yaw += dx * 0.4;
       st.vel = st.vel * 0.5 + ((dx * 0.4) / dt) * 0.5; // degrees per ms, smoothed over the last few moves
       st.pitch = Math.min(5, Math.max(-40, st.pitch - dy * 0.25));
+      place();
     };
     const up = (ev: PointerEvent) => {
       st.dragging = false;
@@ -270,6 +395,7 @@ export function Cabinet3D({ children, front, screenTop, stageH, whole = false }:
       st.base = st.yaw - SWAY * Math.sin(st.phase); // sway on from where you let go
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      if (!reducedMotion() && !st.front) coast();
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -300,44 +426,7 @@ export function Cabinet3D({ children, front, screenTop, stageH, whole = false }:
         }}
       >
         {/* floor, with the cabinet's shadow on it */}
-        <Face x={-100} y={FLOOR_Y + 1} z={BACK_Z - 100} turn="rotateX(90deg)" w={CAB_W + 200} h={CP_FRONT.z - BACK_Z + 260} className="bg-night">
-          <div className="absolute bg-black" style={{ left: 100, top: 100, width: CAB_W, height: BODY_Z - BACK_Z }} />
-        </Face>
-
-        <Face y={TOP_Y} z={BACK_Z} turn="rotateX(90deg)" w={CAB_W} h={MARQUEE.z - BACK_Z} className="border-2 border-black bg-slate" />
-        <Face x={CAB_W} y={TOP_Y} z={BACK_Z} turn="rotateY(180deg)" w={CAB_W} h={SIDE_H} className="border-2 border-black bg-night" />
-        <Face y={TOP_Y} z={BACK_Z} turn="rotateY(-90deg)" w={SIDE_W} h={SIDE_H}>
-          <SidePanel side="left" />
-        </Face>
-        <Face x={CAB_W} y={TOP_Y} z={CP_FRONT.z} turn="rotateY(90deg)" w={SIDE_W} h={SIDE_H}>
-          <SidePanel side="right" />
-        </Face>
-
-        {/* marquee: a tall lit sign */}
-        <Face y={TOP_Y} z={MARQUEE.z} w={CAB_W} h={MARQUEE.y - TOP_Y} className="overflow-hidden bg-navy">
-          <Stripes height={MARQUEE.y - TOP_Y} />
-          <div
-            className="absolute flex items-center justify-center gap-6 border-4 border-gold bg-black"
-            style={{ left: 28, top: 14, right: 28, bottom: 14, boxShadow: `0 0 0 2px ${PALETTE.black}` }}
-          >
-            <img src={BALL_URL} width={64} height={64} alt="" />
-            <span className="font-head text-[32px] text-gold" style={{ textShadow: `3px 3px 0 ${PALETTE.red}` }}>
-              {GAME_NAME}
-            </span>
-            <img src={BALL_URL} width={64} height={64} alt="" />
-          </div>
-        </Face>
-
-        {/* speaker panel, sloping back under the marquee */}
-        <Face y={SPEAKER.y} z={SPEAKER.z} turn={`rotateX(${SPEAKER.deg}deg)`} w={CAB_W} h={SPEAKER.h} className="overflow-hidden border-2 border-black bg-night">
-          <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 gap-[160px]">
-            {[0, 1].map((i) => (
-              <div key={i} className="grid grid-cols-6 gap-[6px]">
-                {Array.from({ length: 18 }, (_, j) => <div key={j} className="h-[6px] w-[6px] bg-black" />)}
-              </div>
-            ))}
-          </div>
-        </Face>
+        <CabinetBack />
 
         {/* the screen panel: bezel and live screen, leaned back */}
         <Face y={PANEL_TOP.y} z={PANEL_TOP.z} turn={`rotateX(${TILT}deg)`} w={CAB_W} h={PANEL_Y1 - PANEL_Y0} className="overflow-hidden bg-navy">
@@ -347,28 +436,7 @@ export function Cabinet3D({ children, front, screenTop, stageH, whole = false }:
           </Band>
         </Face>
 
-        {/* control panel box: top with the stick and buttons, and its front face */}
-        <Face y={CP_TOP.y} z={CP_TOP.z} turn={`rotateX(${CP_TOP.deg}deg)`} w={CAB_W} h={CP_TOP.h} className="border-2 border-black bg-slate" style={{ transformStyle: "preserve-3d" }}>
-          <div className="absolute left-[10px] right-[10px] h-[52px]" style={{ top: (CP_TOP.h - 52) / 2, transformStyle: "preserve-3d" }}>
-            <DeckControls stickStyle={{ transformOrigin: "50% 100%", transform: `rotateX(${-CP_TOP.deg}deg)` }} />
-          </div>
-        </Face>
-        <Face y={CP_FACE.y} z={CP_FACE.z} turn={`rotateX(${CP_FACE.deg}deg)`} w={CAB_W} h={CP_FACE.h} className="flex items-center justify-center overflow-hidden border-2 border-black bg-navy">
-          <div className="absolute inset-x-0 top-0 h-[6px] bg-red" />
-          <span className="font-head text-[24px] text-gold" style={{ textShadow: `2px 2px 0 ${PALETTE.red}` }}>{GAME_NAME}</span>
-        </Face>
-
-        {/* lower body, under the control panel */}
-        <Face y={CP_LIP.y} z={BODY_Z} w={CAB_W} h={FLOOR_Y - CP_LIP.y} className="overflow-hidden bg-navy">
-          <Stripes height={FLOOR_Y} />
-          <img src={BALL_URL} width={128} height={128} alt="" className="absolute left-1/2 top-[110px] -translate-x-1/2" />
-          <div className="absolute left-1/2 top-[268px] -translate-x-1/2 border-2 border-black bg-night px-3 py-2 font-head text-[10px] text-gold">
-            FREE PLAY
-          </div>
-          <div className="absolute inset-x-0 bottom-[44px] h-[6px] bg-orange" />
-          <div className="absolute inset-x-0 bottom-[36px] h-[4px] bg-gold" />
-          <div className="absolute inset-x-0 bottom-0 h-[36px] bg-black" />
-        </Face>
+        <CabinetFront />
       </div>
 
       {/* the stage can be wider than a phone screen: keep the hint inside the window's right edge */}

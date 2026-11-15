@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { cpuTeam } from "../../core/cpuTeam.ts";
 import { dexOf, salary, SLOTS, STARTERS } from "../../core/lineup.ts";
@@ -27,7 +27,6 @@ export function Title() {
   const [ready, setReady] = useState(stage === "menu"); // the slam-in has landed: the buttons show
   useMusic("title", stage === "cabinet");
   // the title theme: muffled while you're looking at the cabinet from across the room, clear once you're in
-  const [message, setMessage] = useState("");
   const [host, setHost] = useState<HTMLDivElement | null>(null); // the cabinet remounts the screen when it changes view
   const { data } = useRated();
   const portrait = usePortraitTouch(); // a phone held upright: the whole cabinet, then a full-screen menu
@@ -46,24 +45,30 @@ export function Title() {
     }
   }, [data]);
 
-  // the background: two all-star CPU teams playing on, unseen, with their big plays shown as they happen
+  // the background: two all-star CPU teams playing on, unseen, with their big plays shown as they happen. The
+  // cabinet remounts the screen when it turns to face you: the same game moves over (a new one froze the zoom).
+  const view = useRef<LiveView | null>(null);
   useEffect(() => {
     if (!data || !host) return;
-    let view: LiveView | null = null, dead = false;
+    if (view.current) return view.current.moveTo(host);
+    let dead = false;
     import("../../game/LiveView.ts").then(({ LiveView }) => {
       if (dead) return;
       const seed = (Math.random() * 2 ** 31) >>> 0;
       const home = cpuTeam(data, "ALL-STAR", "unlimited", seed), away = cpuTeam(data, "ALL-STAR", "unlimited", seed + 1);
       const youColor = teamColor(home.colors[0]), cpuColor = teamColor(away.colors[0] === home.colors[0] ? away.colors[1] : away.colors[0]);
-      view = new LiveView(host, {
+      view.current = new LiveView(host, {
         home, away, size: 5, dex: dexOf(data), youColor, cpuColor, level: LIVE_AI["ALL-STAR"], seed, attract: true, onOver: () => {},
       });
     });
     return () => {
       dead = true;
-      view?.destroy();
     };
   }, [data, host]);
+  useEffect(() => () => {
+    view.current?.destroy();
+    view.current = null;
+  }, []);
 
   useEffect(() => {
     if (stage === "menu") return;
@@ -90,8 +95,7 @@ export function Title() {
   const items = [
     { label: "PLAY", onSelect: () => navigate("/play", { state: { starters: five.map((p) => p.id) } }) },
     { label: "DRAFT", onSelect: () => navigate("/draft") },
-    // (ABOUT again closes it)
-    { label: "ABOUT", onSelect: () => setMessage((m) => (m ? "" : "A free fan-made hoops game, created by Hudson Bjerkness. Pokémon data and sprites come from PokéAPI.")) },
+    { label: "ABOUT", onSelect: () => navigate("/about") },
     { label: "POKéDEX", onSelect: () => navigate("/dex") },
   ];
   const [pick, setPick] = useState(0);
@@ -104,7 +108,6 @@ export function Title() {
       ? { ArrowDown: [1, 2, 3, 3], ArrowUp: [0, 0, 1, 2] } // portrait: one column
       : { ArrowLeft: [1, 0, 2, 3], ArrowRight: [1, 0, 2, 3], ArrowDown: [2, 2, 3, 3], ArrowUp: [0, 1, 0, 2] };
     const onKey = (e: KeyboardEvent) => {
-      if (message) return void (e.preventDefault(), backBlip(), setMessage("")); // any key closes ABOUT
       if (e.key in MOVES) {
         e.preventDefault();
         moveBlip();
@@ -112,7 +115,7 @@ export function Title() {
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         choose(pick);
-      } else if (e.key === "Escape") (backBlip(), setMessage(""), setStage("cabinet"));
+      } else if (e.key === "Escape") (backBlip(), setStage("cabinet"));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -190,11 +193,6 @@ export function Title() {
           {stacked(2, "mt-2 h-[44px] w-[70%] max-w-[240px]", 12)}
           {stacked(3, "h-[44px] w-[70%] max-w-[240px]", 12)}
         </div>
-        {message && (
-          <button className="px-box absolute inset-x-6 top-[38%] p-[12px] text-left text-[22px] leading-[22px] text-cloud" onClick={() => (backBlip(), setMessage(""))}>
-            {message}
-          </button>
-        )}
         {notice}
       </div>
     );
@@ -216,11 +214,6 @@ export function Title() {
             {button(1, "left-[330px] top-[138px] h-[76px] w-[194px]", 24)}
             {button(2, "left-[245px] top-[262px] h-[26px] w-[150px]", 10)}
             {button(3, "left-[245px] top-[292px] h-[26px] w-[150px]", 10)}
-            {message && (
-              <button className="px-box absolute left-[118px] top-[138px] min-h-[76px] w-[406px] p-[10px] text-left text-[20px] leading-[20px] text-cloud" onClick={() => (backBlip(), setMessage(""))}>
-                {message}
-              </button>
-            )}
           </>
         )}
         {/* the fan-game notice along the bottom, arcade style */}

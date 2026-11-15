@@ -3,6 +3,7 @@
 // own). Browsers won't play sound before the first click or key press, so it waits for one. M mutes, as in a game.
 import { useEffect } from "react";
 import { Music, type SongName } from "../game/music.ts";
+import { audio } from "./sound.ts";
 
 const music = new Music("menu");
 let want: { song: SongName; muffled: boolean } | null = null;
@@ -18,6 +19,7 @@ function apply() {
 
 if (typeof window !== "undefined") {
   const unlock = () => {
+    audio(); // wake the page's sound (made paused while the page loaded); Safari only allows it inside a press
     if (unlocked && !music.blocked) return;
     unlocked = true;
     apply();

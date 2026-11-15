@@ -21,6 +21,8 @@ import { TouchControls } from "../components/TouchControls.tsx";
 import { isIphoneBrowser, isTouch, useScrollToStart } from "../touch.ts";
 import { TipOff } from "../components/TipOff.tsx";
 import { reducedMotion } from "../components/Cabinet3D.tsx";
+import { checkFranchise, finishSlate, leagueDex, recordYours, yourGame, type Career } from "../../core/franchise.ts";
+import { loadFranchise, saveFranchise } from "../../storage.ts";
 
 applyDevSettings(); // the dev menu's saved tuning, before any game starts
 
@@ -41,6 +43,9 @@ export type ArcadeSetup = {
   cpuColor: PaletteName;
   level: Difficulty;
   tutorial?: boolean; // HOW TO PLAY: a practice 3v3, step by step
+  /** A franchise game (FranchisePage): its key on the league's slate, the season, and the two rosters' development
+   *  (their ratings as the league has them). The result is recorded when the game ends. */
+  franchise?: { key: string; season: number; career: Record<string, Career> };
   /** Where PRE-GAME goes back to: this team and opponent, that mode's character select. */
   back?: {
     team: string; select: 1 | 3 | 5 | "solo" | "half" | null; difficulty: Difficulty; oppSeed: number;
@@ -73,7 +78,15 @@ export function ArcadePage() {
   const state = useLocation().state;
   const setup = valid(state) ? state : null;
   const { data } = useRated();
-  const dex = useMemo(() => (data ? dexOf(data) : null), [data]);
+  // a franchise game rates players as the league does (their development added)
+  const dex = useMemo(() => (data ? (setup?.franchise ? leagueDex(dexOf(data), setup.franchise) : dexOf(data)) : null), [data, setup]);
+  // a franchise game that's already been played (a reload, or the back button): back to the league
+  const stale = useMemo(() => {
+    if (!setup?.franchise || !data) return false;
+    const f = checkFranchise(loadFranchise(), dexOf(data));
+    return !f || f.season !== setup.franchise.season || yourGame(f)?.key !== setup.franchise.key;
+  }, [setup, data]);
+  const recorded = useRef(false);
   const host = useRef<HTMLDivElement>(null);
   const game = useRef<LiveView | null>(null);
   const [round, setRound] = useState(0); // bump to restart
@@ -85,8 +98,17 @@ export function ArcadePage() {
   const [, refresh] = useState(0); // re-read the roster after a sub
   const [simming, setSimming] = useState<GameResult | null>(null); // "sim the rest": the tip-off playback is on
 
+  // a franchise game's result goes into the league as soon as it's final (and the rest of the week is simmed)
   useEffect(() => {
-    if (!setup || !dex || !host.current) return;
+    if (!setup?.franchise || !final?.result || !data || recorded.current) return;
+    recorded.current = true;
+    const pool = dexOf(data), f = checkFranchise(loadFranchise(), pool);
+    if (!f || f.season !== setup.franchise.season || yourGame(f)?.key !== setup.franchise.key) return;
+    saveFranchise(finishSlate(recordYours(f, setup.franchise.key, final.result.teams), pool));
+  }, [final, setup, data]);
+
+  useEffect(() => {
+    if (!setup || !dex || !host.current || stale) return;
     let dead = false;
     (async () => {
       // the HUD draws with the pixel font, so wait for it; the 3D code loads on demand (it's big)
@@ -106,7 +128,7 @@ export function ArcadePage() {
       game.current?.destroy();
       game.current = null;
     };
-  }, [setup, dex, round]);
+  }, [setup, dex, round, stale]);
 
   // Esc pauses and resumes (from the subs or controls screen it goes back to the pause menu)
   useEffect(() => {
@@ -164,6 +186,7 @@ export function ArcadePage() {
   const [scrollFirst, scrollAgain] = useScrollToStart(!final && !simming); // (off for the results: they scroll)
 
   if (!setup) return <Navigate to="/play" replace />;
+  if (stale && !final) return <Navigate to="/franchise" replace />;
 
   const restart = () => {
     selectBlip();
@@ -173,6 +196,7 @@ export function ArcadePage() {
   };
   const toPreGame = () => {
     backBlip();
+    if (setup.franchise) return navigate("/franchise"); // (a game left part-way is still to play there)
     navigate("/play", { state: setup?.back }); // back to the same team, opponent and character select
   };
   /** After the lesson: straight into a real 5v5 with the same teams. */
@@ -207,12 +231,19 @@ export function ArcadePage() {
             <HomeLogo />
             FINAL
           </h1>
-          <button className="px-btn" onClick={toPreGame}><Arrow left /> PRE-GAME</button>
+          {!setup.franchise && <button className="px-btn" onClick={toPreGame}><Arrow left /> PRE-GAME</button>}
         </div>
         <Results result={final.result} dex={dex} mine={setup.home} />
         <div className="mt-4 flex flex-wrap gap-2">
-          <button className="px-btn" autoFocus onClick={restart}>REMATCH</button>
-          <button className="px-btn" onClick={toPreGame}><Arrow left /> PRE-GAME</button>
+          {setup.franchise ? (
+            // the result's in the league: no rematch
+            <button className="px-btn" autoFocus onClick={() => (selectBlip(), navigate("/franchise", { replace: true }))}>BACK TO THE LEAGUE <Arrow /></button>
+          ) : (
+            <>
+              <button className="px-btn" autoFocus onClick={restart}>REMATCH</button>
+              <button className="px-btn" onClick={toPreGame}><Arrow left /> PRE-GAME</button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -376,7 +407,7 @@ export function ArcadePage() {
                   <button className="px-btn w-full !py-0 !text-[20px]" autoFocus={!!final && !setup.tutorial} onClick={restart}>
                     {setup.tutorial ? "START OVER" : final ? "REMATCH" : "RESTART"}
                   </button>
-                  <button className="px-btn w-full !py-0 !text-[20px]" onClick={toPreGame}><Arrow left /> PRE-GAME</button>
+                  <button className="px-btn w-full !py-0 !text-[20px]" onClick={toPreGame}><Arrow left /> {setup.franchise ? "THE LEAGUE" : "PRE-GAME"}</button>
                 </div>
               </div>
             )}

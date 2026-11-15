@@ -53,6 +53,18 @@ export function renameTeam(id: string, name: string) {
 
 export const deleteTeam = (id: string) => write(TEAMS_KEY, listTeams().filter((t) => t.id !== id));
 
+// The franchise (FRANCHISE mode), as stored. Check it with core/franchise.ts checkFranchise before using it.
+const FRANCHISE_KEY = "s5p-franchise-v1";
+export const loadFranchise = (): unknown => read<unknown>(FRANCHISE_KEY, null);
+export const saveFranchise = (f: unknown) => write(FRANCHISE_KEY, f);
+export const clearFranchise = () => {
+  try {
+    localStorage.removeItem(FRANCHISE_KEY);
+  } catch {
+    // storage blocked: nothing to clear
+  }
+};
+
 // The draft in progress (or just finished), as stored. Check it with core/draft.ts checkDraft before using it.
 const RUN_KEY = "s5p-draft-run-v1";
 export const loadRun = (): unknown => read<unknown>(RUN_KEY, null);

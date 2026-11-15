@@ -7,6 +7,9 @@ export type PokemonData = {
   generation: number;
   /** evolution family (PokéAPI evolution chain id): Pichu, Pikachu and Raichu share one */
   chain: number;
+  /** the Pokémon this one evolves from (its number here; an Alolan form's is the Alolan pre-evolution when there is
+   *  one), none for a first stage */
+  from?: number;
   types: string[];
   heightM: number; // API decimetres / 10
   weightKg: number; // API hectograms / 10

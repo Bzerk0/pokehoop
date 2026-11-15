@@ -106,6 +106,14 @@ async function main() {
     console.error("Nothing written. Re-run to retry (finished downloads are cached).");
     process.exit(1);
   }
+  // an Alolan form evolves from the Alolan pre-evolution if there is one (Alolan Raticate from Alolan Rattata;
+  // Alolan Raichu from plain Pikachu, which has no Alolan form)
+  const alolan = new Map(out.filter((forms) => forms.length > 1).map((forms) => [forms[0].id, forms[1].id]));
+  for (const forms of out) for (const p of forms.slice(1)) if (p.from && alolan.has(p.from)) p.from = alolan.get(p.from);
+  // these only evolve from a regional form the data doesn't have (Galarian Farfetch'd → Sirfetch'd, Hisuian Sneasel
+  // → Sneasler, Paldean Wooper → Clodsire …): plain Farfetch'd mustn't evolve into one
+  const fromMissingForm = new Set(["sirfetchd", "mr-rime", "cursola", "obstagoon", "runerigus", "perrserker", "overqwil", "sneasler", "clodsire", "basculegion"]);
+  for (const forms of out) if (fromMissingForm.has(forms[0].slug)) delete forms[0].from;
   const all = [...out.map((forms) => forms[0]), ...out.flatMap((forms) => forms.slice(1))]; // the species in dex order, then the Alolan forms
   await writeFile(OUT_DATA, JSON.stringify(all));
   console.log(`Wrote ${all.length} Pokémon to ${OUT_DATA}`);

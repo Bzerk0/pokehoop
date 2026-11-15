@@ -1,3 +1,4 @@
+import { FRANCHISE } from "../../core/ratingConfig.ts";
 import { selectBlip } from "../sound.ts";
 import { inkOn, PALETTE, type PaletteName } from "../theme/palette.ts";
 import { Arrow } from "./Arrow.tsx";
@@ -43,7 +44,7 @@ function CourtMini({ n, half, solo }: { n: number; half?: boolean; solo?: boolea
 }
 
 /** The first step of a game: just the game modes, as big arcade cards. */
-export function ModeSelect({ playable, onPick, onTutorial }: { playable: boolean; onPick: (m: ModeKey) => void; onTutorial: () => void }) {
+export function ModeSelect({ playable, onPick, onTutorial, onFranchise }: { playable: boolean; onPick: (m: ModeKey) => void; onTutorial: () => void; onFranchise: () => void }) {
   const card = (m: ModeDef, big: boolean) => {
     const ink = PALETTE[inkOn(m.color)];
     return (
@@ -75,6 +76,23 @@ export function ModeSelect({ playable, onPick, onTutorial }: { playable: boolean
         CHOOSE YOUR GAME
       </h2>
       <div className="grid gap-4 sm:grid-cols-3">{MAIN.map((m) => card(m, true))}</div>
+      {/* FRANCHISE: a whole league, season after season (its own page; it picks its own team, so it's never disabled) */}
+      <button
+        className="group flex cursor-pointer flex-col border-4 border-black bg-night text-left transition-transform hover:-translate-y-[4px] hover:border-gold focus-visible:border-gold sm:flex-row sm:items-stretch"
+        style={{ boxShadow: `4px 4px 0 ${PALETTE.black}` }}
+        onClick={() => (selectBlip(), onFranchise())}
+      >
+        <span className="flex items-center gap-3 px-3 py-2 sm:w-[260px] sm:shrink-0" style={{ background: PALETTE.purple, color: PALETTE[inkOn("purple")] }}>
+          <span className="font-head text-[24px] leading-[1.2]">FRANCHISE</span>
+        </span>
+        <span className="flex flex-1 flex-col justify-center gap-1 px-3 py-3 text-[22px] leading-[22px] text-cloud">
+          <span className="text-white">Run a team season after season.</span>
+          <span>Play or sim a {2 * (FRANCHISE.teams - 1)}-game season, win the playoffs, watch your Pokémon evolve, then rebuild in the draft and free agency.</span>
+        </span>
+        <span className="flex items-center justify-center gap-2 bg-black px-4 py-2 font-head text-[14px] text-steel group-hover:text-gold">
+          START <span className="group-hover:blink"><Arrow /></span>
+        </span>
+      </button>
       <div>
         <p className="m-0 mb-2 text-center font-head text-[10px] text-steel">SPECIAL MODES (TEST)</p>
         <div className="mx-auto grid max-w-[760px] gap-4 sm:grid-cols-2">{SPECIAL.map((m) => card(m, false))}</div>

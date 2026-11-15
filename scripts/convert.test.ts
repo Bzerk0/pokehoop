@@ -42,4 +42,19 @@ describe("toPokemonData", () => {
       sprite: "/sprites/25.png", spriteW: 30, spriteH: 28,
     });
   });
+  it("keeps what it evolves from (a first stage has none)", () => {
+    const stat = (name: string) => ({ base_stat: 50, stat: { name } });
+    const species = {
+      id: 26, name: "raichu", generation: { name: "generation-i" }, is_legendary: false, is_mythical: false,
+      evolution_chain: { url: "https://pokeapi.co/api/v2/evolution-chain/10/" }, names: [], varieties: [],
+      evolves_from_species: { name: "pikachu", url: "https://pokeapi.co/api/v2/pokemon-species/25/" },
+    };
+    const pokemon = {
+      id: 26, name: "raichu", height: 8, weight: 300, sprites: { front_default: "x" }, types: [{ slot: 1, type: { name: "electric" } }],
+      stats: ["hp", "attack", "defense", "special-attack", "special-defense", "speed"].map(stat),
+    };
+    const sprite = { path: "/sprites/26.png", w: 30, h: 28 };
+    expect(toPokemonData(species, pokemon, sprite).from).toBe(25);
+    expect("from" in toPokemonData({ ...species, evolves_from_species: null }, pokemon, sprite)).toBe(false);
+  });
 });

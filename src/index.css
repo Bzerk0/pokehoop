@@ -290,9 +290,10 @@ canvas {
     transform: translateY(-4px);
   }
 }
+/* opacity, not visibility: the browser runs it on the graphics side, so it keeps time while the page is busy */
 @keyframes blink {
   50% {
-    visibility: hidden;
+    opacity: 0;
   }
 }
 

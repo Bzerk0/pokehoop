@@ -126,6 +126,32 @@ export const DIFFICULTIES = [
 ] as const;
 export const CPU_SAMPLE = 15;
 
+/** FRANCHISE mode (franchise.ts): an 8-team league (yours and 7 CPU teams at the difficulty you pick), a double
+ *  round robin, then the top `playoffTeams` play best-of-(2 × seriesWins − 1) series. Contracts run `years` seasons
+ *  (a random length in that range: CPU signings and the first season's), `resignYears` when you re-sign one, and
+ *  rookies `rookieYears` at `rookieScale` × their price. CPU teams keep an expiring player with chance `cpuKeep`.
+ *  At each season's end a Pokémon with an evolution evolves with chance base + minutes × (its minutes a game ÷
+ *  fullAt seconds, at most 1); and every player's rating moves by a whole number in the range for his age (seasons in
+ *  the league), kept within dev.min…dev.max in all. The rookie draft: `draftRounds` rounds, worst record first, from
+ *  a class of `classSize` young Pokémon (ones that can still evolve). */
+export const FRANCHISE = {
+  teams: 8,
+  playoffTeams: 4,
+  seriesWins: 2,
+  years: [1, 4] as [number, number],
+  resignYears: 2,
+  signYears: 2,
+  rookieYears: 3,
+  rookieScale: 0.5,
+  cpuKeep: 0.7,
+  evolve: { base: 0.15, minutes: 0.6, fullAt: 270 },
+  dev: { youngUntil: 2, oldFrom: 6, young: [0, 3], prime: [-1, 2], old: [-3, 0], min: -10, max: 8 } as {
+    youngUntil: number; oldFrom: number; young: [number, number]; prime: [number, number]; old: [number, number]; min: number; max: number;
+  },
+  draftRounds: 2,
+  classSize: 20,
+};
+
 /** The game simulator (PLAN.md §9). Make chances are logistic around the base rates: each point the shooter's
  *  rating beats the defender's moves the odds by 1/SLOPE in log-odds. Tuned with scripts/balance.ts. */
 export const SIM = {

@@ -22,7 +22,7 @@ import { OpponentSelect } from "../components/OpponentSelect.tsx";
 import { useMusic } from "../bgm.ts";
 
 type Dex = Map<number, RatedPokemon>;
-type Choice = { key: string; label: string; lineup: Lineup };
+export type Choice = { key: string; label: string; lineup: Lineup };
 
 /** A new player's first team: the five on the title screen start (in the order they stood), the bench is
  *  auto-filled under the cap. */
@@ -34,7 +34,7 @@ function titleTeam(starters: unknown, pool: RatedPokemon[], dex: Dex): Choice | 
 }
 
 /** Every team you could play with: your last finished draft, your Free Build team, your saved teams. */
-function yourTeams(dex: Dex): Choice[] {
+export function yourTeams(dex: Dex): Choice[] {
   const out: Choice[] = [];
   const run = loadRun() as { draft?: unknown; name?: string; colors?: [number, number] } | null;
   const draft = run && checkDraft(run.draft, dex);
@@ -45,7 +45,7 @@ function yourTeams(dex: Dex): Choice[] {
   return out;
 }
 
-const ready = (l: Lineup, dex: Dex) => l.ids.every((id) => id != null) && problems(l, dex).length === 0;
+export const ready = (l: Lineup, dex: Dex) => l.ids.every((id) => id != null) && problems(l, dex).length === 0;
 
 /** Someone who got on the court or did anything (the bench players who never played are left off). */
 const played = (l: Line) => l.sec > 0 || l.fga > 0 || l.pts + l.reb + l.ast + l.stl + l.blk + l.to > 0;
@@ -344,7 +344,7 @@ export function PlayPage() {
     <div className="mx-auto max-w-[1200px] p-4">
       {header}
       {!playable && <p className="px-box mb-4 p-3 text-[22px] text-red">This team can't play yet: it needs all 8 players and no rule broken (check it in Free Build).</p>}
-      <ModeSelect playable={playable} onPick={(m) => (setSelecting(m), setChosen(null), setOppPicks([]))} onTutorial={() => live(3, true)} />
+      <ModeSelect playable={playable} onPick={(m) => (setSelecting(m), setChosen(null), setOppPicks([]))} onTutorial={() => live(3, true)} onFranchise={() => navigate("/franchise")} />
     </div>
   );
 }

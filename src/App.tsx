@@ -1,10 +1,12 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { ErrorBoundary } from "./ui/components/ErrorBoundary.tsx";
 import { Footer } from "./ui/components/Footer.tsx";
+import { About } from "./ui/pages/About.tsx";
 import { ArcadePage } from "./ui/pages/ArcadePage.tsx";
 import { Builder } from "./ui/pages/Builder.tsx";
 import { Dex } from "./ui/pages/Dex.tsx";
 import { DraftPage } from "./ui/pages/DraftPage.tsx";
+import { FranchisePage } from "./ui/pages/FranchisePage.tsx";
 import { PlayPage } from "./ui/pages/PlayPage.tsx";
 import { SharedTeam } from "./ui/pages/SharedTeam.tsx";
 import { Title } from "./ui/pages/Title.tsx";
@@ -18,6 +20,8 @@ export function App() {
           <Routes>
             <Route path="/" element={<Title />} />
             <Route path="/dex" element={<Dex />} />
+            <Route path="/about" element={<About />} />
+            <Route path="/franchise" element={<FranchisePage />} />
             <Route path="/build" element={<Builder />} />
             <Route path="/draft" element={<DraftPage />} />
             <Route path="/play" element={<PlayPage />} />

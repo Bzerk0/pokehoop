@@ -1,10 +1,14 @@
 // 8-bit blips made on the fly with Web Audio (no sound files, nothing to license).
 let ctx: AudioContext | null = null;
 
-/** The page's one audio context (made on first use), or null if audio isn't available. */
+/** The page's one audio context, or null if audio isn't available. Making it can freeze the page for half a second
+ *  (484 ms measured on Windows), so main.tsx makes it while the page loads, not on the first key press (on the title,
+ *  that press is INSERT COIN, mid-animation). Made before any press, it starts paused (the browsers' autoplay rule);
+ *  the first press wakes it (bgm.ts), and so does any sound after that. */
 export function audio(): AudioContext | null {
   try {
     ctx ??= new AudioContext();
+    if (ctx.state === "suspended") ctx.resume().catch(() => {}); // not allowed yet: it stays paused, no harm
     return ctx;
   } catch {
     return null;
@@ -13,7 +17,8 @@ export function audio(): AudioContext | null {
 
 export function blip(freq = 660, ms = 45, volume = 0.05) {
   try {
-    ctx ??= new AudioContext();
+    const ctx = audio();
+    if (!ctx) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "square";

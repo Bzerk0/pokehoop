@@ -180,6 +180,7 @@ export class LiveView {
   private replay: { clip: Clip; t: number; hold: number; cut: number; hit: number; label: string; saved: Snap; reel: boolean; began: number } | null = null;
   private reel: Clip[] = [];
   private gone = false; // destroyed: late timers do nothing
+  private shadersReady = false; // the 3D draws once every shader has compiled (off the main thread: see the constructor)
   private rpos = new THREE.Vector3();
   private rlook = new THREE.Vector3();
   private replayFlashUntil = 0;
@@ -225,6 +226,8 @@ export class LiveView {
     this.facing = this.g.players.map((p) => p.side === 1);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: false });
+    // reading back each shader's compile log on its first use froze the first frame ~225 ms: only while developing
+    this.renderer.debug.checkShaderErrors = import.meta.env.DEV;
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(VIEW_W, VIEW_H, false);
     const hud = document.createElement("canvas");
@@ -238,6 +241,15 @@ export class LiveView {
 
     this.reloadKeys();
     this.build();
+    // compile every shader now, on the graphics driver's own threads where it can: the first frame used to compile
+    // them all at once (a 330 ms freeze on the title, just as the first big play came up)
+    this.renderer.compileAsync(this.scene, this.camera).then(() => {
+      if (this.gone) return;
+      // then one frame drawn and wiped while nothing shows yet: a first draw still cost ~60 ms (buffers, textures)
+      this.renderer.render(this.scene, this.camera);
+      this.renderer.clear();
+      this.shadersReady = true;
+    });
     if (import.meta.env.DEV) (window as unknown as { __live?: LiveView }).__live = this; // dev only: poke at it from the console
     if (d.attract) this.started = true; // no intro, no music, no keys: it just plays
     else {
@@ -309,6 +321,13 @@ export class LiveView {
     this.last = 0;
     this.reloadKeys(); // the CONTROLS screen may have changed them
     if (this.started && !this.ended) this.music.start();
+  }
+  /** Show the game in another element: the same game and drawing context, its two canvases moved (the title's screen
+   *  remounts when the cabinet turns to face you; building a new view there froze the zoom for ~300 ms). */
+  moveTo(host: HTMLElement) {
+    if (host === this.host) return;
+    host.append(...this.host.childNodes);
+    this.host = host;
   }
   destroy() {
     this.gone = true;
@@ -489,7 +508,8 @@ export class LiveView {
       aura.visible = false;
       this.auras.push(aura);
       s.add(aura);
-      const sprite = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ alphaTest: 0.5 })));
+      // solid from the start, as fadeIfInTheWay keeps it out of replays (the shader compiled up front must be this one)
+      const sprite = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ alphaTest: 0.5, transparent: false })));
       sprite.center.set(0.5, 0);
       this.bodies.push(sprite);
       this.dress(pl.i);
@@ -800,7 +820,7 @@ export class LiveView {
     this.vt += dt * (this.menu ? LIVE.menuSlow : 1);
     if (this.d.attract) {
       if (this.replay) this.runReplay(dt, now);
-      else this.attractSearch();
+      else if (this.shadersReady) this.attractSearch(); // (no clip before it can be drawn)
       if (this.replay) this.draw(dt, now); // between clips the last picture stays up
       return;
     }
@@ -1206,7 +1226,7 @@ export class LiveView {
     if (this.replay) this.cinemaCamera(dt, this.replay.clip, this.replay.t, frameAt(this.replay.clip.frames, this.replay.t), this.replay);
     else if (this.cine) this.cinemaCamera(dt, this.cine.clip, this.g.time, snap(this.g), this.cine);
     else this.moveCamera(dt);
-    this.renderer.render(this.scene, this.camera);
+    if (this.shadersReady) this.renderer.render(this.scene, this.camera);
     if (this.d.attract) this.hud.clearRect(0, 0, VIEW_W, VIEW_H); // the title screen draws its own
     else if (this.replay) this.drawReplayHud(now);
     else if (this.cine) this.drawCineHud();

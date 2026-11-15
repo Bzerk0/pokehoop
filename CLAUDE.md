@@ -4,7 +4,8 @@
 - Do only the requested PLAN.md phase.
 - src/core never imports React or Phaser. Tuning numbers live in ratingConfig.ts and the plays data.
 - Use the seeded RNG in core, never Math.random. Never call PokéAPI from the running site.
-- Pixel style (PLAN.md §3): 640×360 canvas, whole-number scaling, pixelArt on, palette colours only, pixel fonts only, no gradients, blur, or rounded UI. Original art and text only.
+- Pixel style (PLAN.md §3): 640×360 canvas, whole-number scaling, pixelArt on, palette colours only, pixel fonts only, no gradients, blur, or rounded UI. Original text. Art is original too, except Pokémon sprites and a few
+  Pokémon game assets (the user's call: Prof. Oak and the text box in `public/art`); credit any of those in credits.ts.
 - Run npm test and npm run build before saying a phase is done.
 
 ## Where things are
@@ -153,13 +154,21 @@
   on fire / breakaway / base): `pl.dunkStyle` plus a move event like "360 DUNK!" (the release stays "DUNK").
 - Title screen (test): attract mode. `Title.tsx` runs a LiveView with `attract: true` (CPU-vs-CPU 5v5 fast-forwarded
   off screen, each spotted clip shown through the replay cameras; no HUD, sound or keys) under the logo; INSERT COIN
-  (Enter/Space/click: one press drops the coin, plays its sound and slams in on the screen: the 3D zoom speeds up all the way in, then the flat screen lands with a stepped bump and a white flash, `.screen-slam`/`.slam-flash`, and the buttons pop in) opens the menu (ABOUT again closes its box; Esc goes back to the cabinet): big PLAY and DRAFT buttons, small ABOUT and POKéDEX under them (arrows move, Esc steps back), a fan-game notice along the bottom; Free Build is reached from the draft and Play pages. The previous title (arena + flaming-ball PRESS START) is
+  (Enter/Space/click: one press drops the coin, plays its sound and slams in on the screen: the 3D zoom speeds up all the way in, then the flat screen lands with a stepped bump and a white flash, `.screen-slam`/`.slam-flash`, and the buttons pop in) opens the menu (Esc goes back to the cabinet): big PLAY and DRAFT buttons, small ABOUT and POKéDEX under them (arrows move, Esc steps back), a fan-game notice along the bottom; Free Build is reached from the draft and Play pages. The previous title (arena + flaming-ball PRESS START) is
   `OldTitle.tsx`, unrouted: route "/" to it in App.tsx to switch back.
-- Credits: anything someone else made goes in `src/ui/credits.ts` (for the Phase 10 About page). Sound files live in
+- Credits: anything someone else made goes in `src/ui/credits.ts`, listed on the About page (`/about`, `About.tsx`, opened by the title's ABOUT). Sound files live in
   `public/sfx/` (the coin: Alex_Jauk on Pixabay, bitcrushed with ffmpeg `acrusher`); everything else is made in code.
 - Title screen performance: big static pixel art is painted once into canvases (`RectCanvas.tsx`), never SVG rects,
   and every animated title piece (`.t-anim`) is its own compositor layer (will-change). Keep it that way: SVG art
-  re-rasterises on every animation step, worst inside the 3D cabinet.
+  re-rasterises on every animation step, worst inside the 3D cabinet. Jank fixes (v2, measured with long-task
+  timings): the cabinet's sway is a Web Animation (`swing` in Cabinet3D, a sampled sine; a script drives it only
+  while dragged or coasting) so main-thread work can't freeze it; its static panels are `memo` (CabinetBack/Front);
+  the title keeps one attract LiveView and moves its canvases (`LiveView.moveTo`) when the cabinet remounts the
+  screen; `new AudioContext()` blocks ~480 ms on Windows, so main.tsx makes it after the first frame (it starts
+  suspended; `audio()` and bgm's unlock resume it); LiveView compiles every shader up front (`compileAsync`, then
+  one drawn-and-wiped warm-up frame; `shadersReady` gates drawing), turns `checkShaderErrors` off outside dev, and
+  player sprites start `transparent: false` (the compiled shader must match). `.blink` animates opacity, not
+  visibility (compositor). Keep new title animations compositor-only (transform/opacity).
 - Gameplay aids (LIVE in ratingConfig.ts): quick shot (K tapped under `quickTap`: no meter, no air ball, accuracy
   falls off with distance, `quickChance`); your block jump drifts toward a nearby shot (`blockNudge`, the player you
   steer only: on the CPU it swatted too many of your shots); chase-down blocks (sprinting in from behind:
@@ -227,6 +236,23 @@
   sim, `simRest` finishes a game from any state), `src/core/stats.ts` (box score shape shared with the live game).
   All tuning in `ratingConfig.ts` (DIFFICULTIES, SIM). `npm run balance` sims 10,000 games; keep a 15-OVR favourite
   at 75–90% wins and team scores at 75–110 (sim.test.ts checks both). Page: `/play` (PlayPage: Pre-Game + Results).
+- FRANCHISE (v2): `src/core/franchise.ts` (pure, seeded; numbers in ratingConfig `FRANCHISE`), page `/franchise`
+  (`FranchisePage.tsx`, reached from the Play page's FRANCHISE card), saved in localStorage `s5p-franchise-v1`
+  (`checkFranchise` on load). An 8-team league: your team (any ready team from `yourTeams`) + 7 `cpuTeam`s at a
+  difficulty, every Pokémon on one team at most; a double round robin (`schedule`, 14 rounds), `standings`, then
+  the top 4 in best-of-3 series (`slate` = the games on now: the season round, or each live series' next game,
+  series kept in step). Your game: PLAY IT (ArcadePage with `ArcadeSetup.franchise`: key, season, both rosters'
+  career; the result is recorded with `recordYours` + `finishSlate` when the game ends; no rematch) or SIM GAME
+  (`simYours`, TipOff playback + Results). Live games score at live pace (~25–40 a team), so their box scores are
+  lower than simmed ones. Contracts (salary, years) per roster slot; your cap is `room()` (expired deals don't count).
+  The off-season (`off.step`: review → resign → draft → sign → `nextStep` starts the next season): everyone ages a
+  year (`career` exp, `dev` rating points by age band; `leagueDex` adds dev to every rating, used by sims, prices
+  and live games), Pokémon evolve along `from` (data: what each evolves from; Alolan forms from Alolan
+  pre-evolutions; ten evolutions that need a missing regional form are cut in build-data.ts) with a chance set by
+  minutes played; CPU teams keep expiring players with `cpuKeep`; a rookie draft (worst record first, young
+  Pokémon that can still evolve, `potential` = best reachable OVR, half-price 3-season deals); free agency (the
+  released, the undrafted and a sample of unsigned Pokémon; `autoSign`); CPU teams refill near their band.
+  `history` keeps each season's champion, your finish and the MVP (`efficiency`).
 - Shared UI: `Modal.tsx` (pop-up window, PlayerModal stat card, the "i" StatsButton), `ProfOak.tsx` (warnings in a
   speech bubble from the left edge; sprite `public/art/oak.png`, cropped from `public/art/oak-sheet.png`), `ChemistryList.tsx`. Free Build's page doesn't
   scroll on desktop: only the picker list does.

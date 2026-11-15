@@ -35,6 +35,7 @@ export type ApiSpecies = {
   names: { name: string; language: Named }[];
   generation: Named;
   evolution_chain: { url: string };
+  evolves_from_species?: { name: string; url: string } | null;
   is_legendary: boolean;
   is_mythical: boolean;
   varieties: { is_default: boolean; pokemon: Named & { url: string } }[];
@@ -64,7 +65,9 @@ export function toPokemonData(
   }
   const chain = Number(species.evolution_chain?.url.match(/evolution-chain\/(\d+)/)?.[1]);
   if (!chain) throw new Error(`${species.name}: missing evolution chain`);
+  const from = Number(species.evolves_from_species?.url.match(/pokemon-species\/(\d+)/)?.[1]);
   return {
+    ...(from ? { from } : {}),
     id: species.id,
     name: species.names.find((n) => n.language.name === "en")?.name ?? species.name,
     slug: species.name,
