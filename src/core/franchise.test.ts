@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  autoSign, checkFranchise, draftLeft, draftOnClock, draftPick, evolutionsOf, finishSlate, leagueDex, newLeague, nextStep, openSlots,
-  payroll, potential, record, recordYours, release, resign, room, rookieSalary, rostered, seriesWins, sign, simPhase, simYours, slate,
-  standings, swap, winner, YOU, yourGame, type Franchise,
+  autoSign, checkFranchise, draftLeft, draftOnClock, draftPick, draftValue, evolutionsOf, finishSlate, leagueDex, newLeague, nextStep,
+  openSlots, payroll, potential, record, recordYours, release, resign, resignPrice, room, rookieSalary, rostered, seriesWins, sign, simPhase,
+  simYours, slate, standings, swap, train, winner, YOU, yourGame, type Franchise,
 } from "./franchise.ts";
 import { autoFill, dexOf, emptyLineup, problems, salary, SLOTS } from "./lineup.ts";
-import { FRANCHISE, SALARY_CAP } from "./ratingConfig.ts";
+import { FRANCHISE, SALARY_CAP, SALARY_MIN } from "./ratingConfig.ts";
 import { rateAll } from "./ratings.ts";
 import { simGame } from "./sim/sim.ts";
 
@@ -165,19 +165,23 @@ describe("the off-season", () => {
     expect(evolved).toBeGreaterThanOrEqual(5); // two starters at ~70% each: at least one evolves ~90% of summers
   }, 60_000);
 
-  it("re-signs at today's price within the cap, or lets the player go", () => {
+  it("re-signs for 1 to 3 seasons (a longer deal is cheaper a season) within the cap, or lets the player go", () => {
     let f = nextStep(toOffseason(league()), dex);
     expect(f.off!.step).toBe("resign");
     for (const id of [...f.off!.expiring]) {
       const slot = f.teams[YOU].roster.findIndex((c) => c?.id === id);
       const price = salary(leagueDex(dex, f).get(id)!);
-      const kept = resign(f, dex, id, true);
-      if (price <= room(f, slot)) {
-        expect(kept.teams[YOU].roster[slot]).toEqual({ id, salary: price, years: FRANCHISE.resignYears });
+      expect(resignPrice(f, dex, id, 2)).toBe(price);
+      expect(resignPrice(f, dex, id, 1)).toBeGreaterThanOrEqual(price);
+      expect(resignPrice(f, dex, id, 3)).toBeLessThanOrEqual(price);
+      expect(resign(f, dex, id, 5)).toBe(f); // no such deal
+      const kept = resign(f, dex, id, 3);
+      if (resignPrice(f, dex, id, 3) <= room(f, slot)) {
+        expect(kept.teams[YOU].roster[slot]).toEqual({ id, salary: resignPrice(f, dex, id, 3), years: 3 });
         f = kept;
       } else {
         expect(kept).toBe(f); // can't afford him
-        f = resign(f, dex, id, false);
+        f = resign(f, dex, id, 0);
         expect(f.teams[YOU].roster[slot]).toBeNull();
         expect(f.off!.released).toContain(id);
       }
@@ -194,47 +198,108 @@ describe("the off-season", () => {
     f.teams[YOU].roster = r.map((c, i) => (i >= 6 ? { ...c!, years: 0 } : { ...c!, years: Math.max(1, c!.years) }));
     f.off!.expiring = f.teams[YOU].roster.slice(6).map((c) => c!.id);
     const others = f.teams[YOU].roster.slice(0, 6).reduce((s, c) => s + c!.salary, 0);
-    expect(room(f, 6)).toBe(SALARY_CAP - others);
-    expect(room(f, 7)).toBe(SALARY_CAP - others);
+    // …less the minimum salary kept back for the other one's spot (if he leaves, someone must fill it)
+    expect(room(f, 6)).toBe(SALARY_CAP - others - SALARY_MIN);
+    expect(room(f, 7)).toBe(SALARY_CAP - others - SALARY_MIN);
   });
 
-  it("drafts young Pokémon, worst record first, into open slots on rookie deals", () => {
-    let f = nextStep(toOffseason(league()), dex);
-    expect(f.off!.step).toBe("resign");
-    f = release(f, 7); // room for a rookie
-    f = nextStep(f, dex);
+  it("sends one player a summer to training camp", () => {
+    const f = toOffseason(league());
+    const id = f.teams[YOU].roster[7]!.id, before = f.career[id].dev;
+    const t = train(f, id);
+    expect(t.career[id].dev).toBe(Math.min(FRANCHISE.dev.max, before + FRANCHISE.campBoost));
+    expect(t.off!.trained).toBe(id);
+    expect(train(t, f.teams[YOU].roster[6]!.id)).toBe(t); // one a summer
+    expect(train(f, f.teams[1].roster[0]!.id)).toBe(f); // not someone else's player
+    expect(leagueDex(dex, t).get(id)!.ovr.PG).toBe(Math.min(99, leagueDex(dex, f).get(id)!.ovr.PG + t.career[id].dev - before));
+  });
+
+  it("draws the draft order: lottery teams first, then playoff teams, the champions last", () => {
+    const first = new Map<number, number>();
+    for (let seed = 0; seed < 12; seed++) {
+      let f = toOffseason(newLeague(pool, dex, mine, "PRO", seed));
+      const table = standings(f).map((s) => s.team), champ = f.teams.findIndex((t) => t.name === f.history[0].champion);
+      f = nextStep(nextStep(f, dex), dex);
+      const { order } = f.off!.draft!;
+      expect([...order].sort()).toEqual(table.map((_, i) => i));
+      expect(new Set(order.slice(0, 4))).toEqual(new Set(table.slice(4))); // the four that missed the playoffs
+      expect(order[order.length - 1]).toBe(champ);
+      const worstGotIt = order[0] === table[table.length - 1];
+      first.set(Number(worstGotIt), (first.get(Number(worstGotIt)) ?? 0) + 1);
+    }
+    expect(first.get(1) ?? 0).toBeGreaterThan(0); // the worst team wins the lottery sometimes…
+    expect(first.get(1) ?? 0).toBeLessThan(12); // …but not every time
+  }, 60_000);
+
+  it("CPU teams draft the prospects they rate highest, never the bottom of the class", () => {
+    let f = nextStep(nextStep(toOffseason(league()), dex), dex);
+    const d = f.off!.draft!, ld = leagueDex(dex, f), evos = evolutionsOf(dex);
+    const value = (id: number) => draftValue(ld.get(id)!, ld, evos);
+    const cpu = d.picks.filter((p) => p.team !== YOU && p.id != null);
+    expect(cpu.length).toBeGreaterThan(0);
+    let gone: number[] = [];
+    for (const p of d.picks) {
+      if (p.id == null) continue;
+      const bestLeft = Math.max(...d.pool.filter((id) => !gone.includes(id)).map(value));
+      expect(value(p.id)).toBeGreaterThanOrEqual(bestLeft - 4); // within the scouts' disagreement of the best left
+      gone = [...gone, p.id];
+    }
+    f = draftPick(f, dex, null);
+    expect(f.off!.draft!.picks.length).toBeGreaterThan(d.picks.length);
+  });
+
+  it("drafts onto an open slot, or over a player (released to the free agents), on a rookie deal", () => {
+    let f = nextStep(nextStep(toOffseason(league()), dex), dex);
     expect(f.off!.step).toBe("draft");
     const d = f.off!.draft!;
-    expect(d.order).toEqual(standings(f).map((s) => s.team).reverse());
     const evos = evolutionsOf(dex);
     expect(d.pool.every((id) => evos.has(id) && potential(id, dex, evos) > dex.get(id)!.ovr[dex.get(id)!.best])).toBe(true);
-    while (draftOnClock(f.off!.draft!) === YOU) {
-      const id = draftLeft(f.off!.draft!)[0];
-      const next = draftPick(f, dex, id);
-      if (next.teams[YOU].roster.some((c) => c?.id === id)) {
-        const c = next.teams[YOU].roster.find((x) => x?.id === id)!;
-        expect(c).toEqual({ id, salary: rookieSalary(leagueDex(dex, f).get(id)!), years: FRANCHISE.rookieYears });
-      }
-      f = next === f ? draftPick(f, dex, null) : next;
+    expect(draftOnClock(d)).toBe(YOU); // you're never passed over without a say
+    // round 1: over your last bench player
+    const id = draftLeft(d)[0], out = f.teams[YOU].roster[7]?.id;
+    const full = openSlots(f.teams[YOU]).length === 0;
+    if (full) expect(draftPick(f, dex, id)).toBe(f); // no open slot: you must say where
+    const next = draftPick(f, dex, id, 7);
+    expect(next.teams[YOU].roster[7]).toEqual({ id, salary: rookieSalary(leagueDex(dex, f).get(id)!), years: FRANCHISE.rookieYears });
+    if (out != null) {
+      expect(next.off!.released).toContain(out);
+      expect(next.off!.draft!.picks.find((p) => p.team === YOU)).toEqual({ team: YOU, id, out });
     }
+    f = next;
+    while (draftOnClock(f.off!.draft!) === YOU) f = draftPick(f, dex, null);
     expect(draftOnClock(f.off!.draft!)).toBeNull();
     const picked = f.off!.draft!.picks.flatMap((p) => (p.id == null ? [] : [p.id]));
     expect(new Set(picked).size).toBe(picked.length);
     expect(new Set(ids(f)).size).toBe(ids(f).length);
+    // everyone released for a rookie is a free agent now
+    const fa = nextStep(f, dex);
+    for (const p of fa.off!.draft!.picks) if (p.out != null) expect(fa.off!.market).toContain(p.out);
   });
 
-  it("signs free agents under the cap, then starts the next season with full rosters", () => {
+  it("signs free agents under the cap (the other teams move after you), then starts the next season with full rosters", () => {
     let f = toOffseason(league());
     while (f.off!.step !== "sign") f = nextStep(f, dex);
     f = release(f, 6);
     f = release(f, 7);
     expect(openSlots(f.teams[YOU]).length).toBeGreaterThanOrEqual(2);
     expect(nextStep(f, dex)).toBe(f); // not with holes in your roster
-    const id = f.off!.market.find((x) => salary(leagueDex(dex, f).get(x)!) <= room(f, openSlots(f.teams[YOU])[0]))!;
-    const signed = sign(f, dex, id);
-    expect(signed.teams[YOU].roster.some((c) => c?.id === id)).toBe(true);
+    const id = f.off!.market.find((x) => salary(leagueDex(dex, f).get(x)!) <= room(f, 7))!;
+    const signed = sign(f, dex, id, 7);
+    expect(signed.teams[YOU].roster[7]).toEqual({ id, salary: salary(leagueDex(dex, f).get(id)!), years: FRANCHISE.signYears });
     expect(signed.off!.market).not.toContain(id);
-    f = autoSign(signed, dex);
+    expect(signed.off!.signings[0]).toEqual({ team: YOU, id });
+    // the CPU teams' signings are off the market and on their rosters
+    for (const s of signed.off!.signings.slice(1)) {
+      expect(s.team).not.toBe(YOU);
+      expect(signed.off!.market).not.toContain(s.id);
+      expect(signed.teams[s.team].roster.some((c) => c?.id === s.id)).toBe(true);
+    }
+    // over a player: he goes back on the market
+    const other = signed.off!.market.find((x) => salary(leagueDex(dex, signed).get(x)!) <= room(signed, 7))!;
+    const swapped = sign(signed, dex, other, 7);
+    expect(swapped.teams[YOU].roster[7]!.id).toBe(other);
+    expect(swapped.off!.market).toContain(id);
+    f = autoSign(swapped, dex);
     expect(openSlots(f.teams[YOU])).toEqual([]);
     expect(payroll(f.teams[YOU])).toBeLessThanOrEqual(SALARY_CAP);
     const season2 = nextStep(f, dex);
@@ -244,10 +309,38 @@ describe("the off-season", () => {
     expect(season2.teams.every((t) => t.roster.every((c) => c))).toBe(true);
     expect(new Set(ids(season2)).size).toBe(FRANCHISE.teams * SLOTS.length);
     expect([...rostered(season2)].every((x) => season2.career[x])).toBe(true);
-    // and it plays on
-    const after = toOffseason(season2);
-    expect(after.history).toHaveLength(2);
   });
+
+  it("stays sound over five seasons run by an automatic manager", () => {
+    for (const seed of [3, 77]) {
+      let f = newLeague(pool, dex, mine, seed === 3 ? "ROOKIE" : "ALL-STAR", seed);
+      for (let season = 1; season <= 5; season++) {
+        f = toOffseason(f);
+        expect(f.history).toHaveLength(season);
+        f = train(f, f.teams[YOU].roster[season % SLOTS.length]!.id);
+        f = nextStep(f, dex);
+        // keep whoever fits on the longest deal, lose the rest
+        for (const id of [...f.off!.expiring]) {
+          const kept = resign(f, dex, id, 3);
+          f = kept === f ? resign(f, dex, id, 0) : kept;
+        }
+        f = nextStep(f, dex);
+        // draft the best prospect over the last bench spot if he's affordable there
+        while (draftOnClock(f.off!.draft!) === YOU) {
+          const picked = draftPick(f, dex, draftLeft(f.off!.draft!)[0], openSlots(f.teams[YOU])[0] ?? 7);
+          f = picked === f ? draftPick(f, dex, null) : picked;
+        }
+        f = autoSign(nextStep(f, dex), dex);
+        expect(openSlots(f.teams[YOU]), `season ${season}`).toEqual([]);
+        expect(payroll(f.teams[YOU])).toBeLessThanOrEqual(SALARY_CAP);
+        f = nextStep(f, dex);
+        expect(f.season).toBe(season + 1);
+        expect(f.teams.every((t) => t.roster.every((c) => c && dex.has(c.id)))).toBe(true);
+        expect(new Set(ids(f)).size).toBe(FRANCHISE.teams * SLOTS.length);
+        expect(checkFranchise(JSON.parse(JSON.stringify(f)), dex)).toEqual(f);
+      }
+    }
+  }, 120_000);
 
   it("swaps your roster slots", () => {
     const f = league();
@@ -264,6 +357,11 @@ describe("saved leagues", () => {
     expect(checkFranchise(JSON.parse(JSON.stringify(f)), dex)).toEqual(f);
     const off = toOffseason(league());
     expect(checkFranchise(JSON.parse(JSON.stringify(off)), dex)).toEqual(off);
+    // a save from before free-agency rounds and training camp still loads
+    const old = JSON.parse(JSON.stringify(off));
+    delete old.off.signings;
+    delete old.off.trained;
+    expect(checkFranchise(old, dex)).toEqual(off);
     expect(checkFranchise(null, dex)).toBeNull();
     expect(checkFranchise({ ...f, v: 2 }, dex)).toBeNull();
     expect(checkFranchise({ ...f, teams: f.teams.slice(1) }, dex)).toBeNull();

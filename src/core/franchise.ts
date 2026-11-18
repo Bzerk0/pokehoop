@@ -4,8 +4,8 @@
 // of young Pokémon, free agency, and the next season. Pure and seeded: no React, no storage. Numbers live in
 // ratingConfig.ts FRANCHISE.
 import { cpuTeam, difficultyOf, type Difficulty } from "./cpuTeam.ts";
-import { emptyLineup, isEligible, salary, SLOTS, slotOvr, type Lineup, type Mode } from "./lineup.ts";
-import { ATTR_MAX, CPU_SAMPLE, DIFFICULTIES, FRANCHISE, SALARY_CAP, SALARY_MIN } from "./ratingConfig.ts";
+import { emptyLineup, isEligible, salary, SLOTS, slotOvr, STARTERS, teamRating, type Lineup, type Mode } from "./lineup.ts";
+import { ATTR_MAX, CPU_SAMPLE, DIFFICULTIES, FRANCHISE, LIVE, SALARY_CAP, SALARY_MIN } from "./ratingConfig.ts";
 import { makeRng, type Rng } from "./rng.ts";
 import { simGame, type GameResult } from "./sim/sim.ts";
 import { score, type TeamBox } from "./stats.ts";
@@ -35,7 +35,8 @@ export type SeasonRecord = {
   mvp: { id: number; team: string; ppg: number; rpg: number; apg: number } | null;
 };
 export type OffStep = "review" | "resign" | "draft" | "sign";
-export type DraftState = { order: number[]; pool: number[]; picks: { team: number; id: number | null }[] };
+/** `out`: the player released to make room for the pick. */
+export type DraftState = { order: number[]; pool: number[]; picks: { team: number; id: number | null; out?: number }[] };
 export type Offseason = {
   step: OffStep;
   changes: Change[];
@@ -43,6 +44,8 @@ export type Offseason = {
   released: number[]; // players let go this summer (they join the free agents)
   draft: DraftState | null;
   market: number[]; // the free agents (the sign step)
+  signings: { team: number; id: number; out?: number }[]; // free agents signed so far, in order (`out`: released for him)
+  trained: number | null; // the player you sent to training camp this summer
 };
 export type Franchise = {
   v: 1;
@@ -117,13 +120,12 @@ export const lineupOf = (f: Franchise, t: number): Lineup => ({
 export const payroll = (t: FTeam) => t.roster.reduce((s, c) => s + (c?.salary ?? 0), 0);
 /** Everyone on a roster. */
 export const rostered = (f: Franchise) => new Set(f.teams.flatMap((t) => t.roster.flatMap((c) => (c ? [c.id] : []))));
-/** What you can pay a player in roster slot `slot`: the cap less everyone else's deal (deals that ran out don't
- *  count: they're off the books until re-signed), keeping the minimum salary for each other open slot. */
+/** What you can pay a player in roster slot `slot`: the cap less everyone else's deal, keeping the minimum salary
+ *  for every other slot that's open or whose deal has run out (it's off the books until re-signed, and if he
+ *  leaves, someone must still fill it). */
 export function room(f: Franchise, slot: number): number {
   const r = f.teams[YOU].roster;
-  const others = r.reduce((s, c, i) => s + (i === slot || !c || c.years === 0 ? 0 : c.salary), 0);
-  const empties = r.filter((c, i) => !c && i !== slot).length;
-  return SALARY_CAP - others - empties * SALARY_MIN;
+  return SALARY_CAP - r.reduce((s, c, i) => s + (i === slot ? 0 : c && c.years > 0 ? c.salary : SALARY_MIN), 0);
 }
 /** A player's price now (his rating, development included). */
 export const priceOf = (f: Franchise, dex: Dex, id: number) => salary(leagueDex(dex, f).get(id)!);
@@ -249,7 +251,7 @@ export function recordYours(f: Franchise, key: string, [mine, theirs]: [TeamBox,
 function simWith(f: Franchise, ld: Dex, key: string): Franchise {
   const at = slate(f).find((x) => x.key === key);
   if (!at || at.game.score) return f;
-  const result = simGame(lineupOf(f, at.game.home), lineupOf(f, at.game.away), ld, gameSeed(f, key));
+  const result = simGame(lineupOf(f, at.game.home), lineupOf(f, at.game.away), ld, gameSeed(f, key), LIVE.simPace);
   return record(f, key, result.teams);
 }
 export const simOne = (f: Franchise, dex: Dex, key: string) => simWith(f, leagueDex(dex, f), key);
@@ -261,7 +263,7 @@ export const opponentIn = (g: FGame) => (g.home === YOU ? g.away : g.home);
 export function simYours(f: Franchise, dex: Dex): { f: Franchise; result: GameResult } | null {
   const at = yourGame(f);
   if (!at) return null;
-  const result = simGame(lineupOf(f, YOU), lineupOf(f, opponentIn(at.game)), leagueDex(dex, f), gameSeed(f, at.key));
+  const result = simGame(lineupOf(f, YOU), lineupOf(f, opponentIn(at.game)), leagueDex(dex, f), gameSeed(f, at.key), LIVE.simPace);
   return { f: recordYours(f, at.key, result.teams), result };
 }
 
@@ -353,11 +355,11 @@ function startOffseason(f: Franchise, dex: Dex, champion: number): Franchise {
     const car = next.career[c.id] ?? { exp: 0, dev: 0 };
     const span = car.exp < D.youngUntil ? D.young : car.exp >= D.oldFrom ? D.old : D.prime;
     const dev = clamp(car.dev + inRange(rng, span), D.min, D.max);
-    if (dev !== car.dev) changes.push({ team: t, kind: dev > car.dev ? "up" : "down", id: c.id, by: dev - car.dev });
     const grown = { exp: car.exp + 1, dev };
     const self = dex.get(c.id)!, st = f.stats[`${t}:${c.id}`];
     const kids = (evos.get(c.id) ?? []).filter((p) => isEligible(p, f.mode) && !taken.has(p.id));
     const roll = rng.next();
+    let id = c.id;
     if (kids.length && roll < evolveChance(st ? st.sec / st.gp : 0)) {
       // an Alolan form stays Alolan (and a plain one plain) when it can
       const alolan = (p: RatedPokemon) => p.slug.endsWith("-alola");
@@ -369,7 +371,9 @@ function startOffseason(f: Franchise, dex: Dex, champion: number): Franchise {
       next.career[to.id] = grown;
       team.roster[slot] = { ...c, id: to.id };
       changes.push({ team: t, kind: "evolved", id: c.id, to: to.id });
+      id = to.id;
     } else next.career[c.id] = grown;
+    if (dev !== car.dev) changes.push({ team: t, kind: dev > car.dev ? "up" : "down", id, by: dev - car.dev }); // (under his new name if he evolved)
   }));
 
   // a season off every deal; CPU teams keep most of their expiring players, you decide on yours
@@ -384,22 +388,58 @@ function startOffseason(f: Franchise, dex: Dex, champion: number): Franchise {
       released.push(c.id);
     }
   }));
+  // CPU teams stay near the league's level: one that's grown too strong can't keep everyone (its best players leave
+  // for the free agents), and one that's faded lets its worst go; the openings are filled when the season starts
+  const band = difficultyOf(f.level);
+  next.teams.forEach((team, t) => {
+    if (t === YOU) return;
+    for (let cut = 0; cut < FRANCHISE.cpuCuts; cut++) {
+      const rating = teamRating(lineupOf(next, t), ld) ?? band.min;
+      const strong = rating > band.max + FRANCHISE.cpuSlack;
+      if (!strong && rating >= band.min - FRANCHISE.cpuSlack) break;
+      const on = team.roster.flatMap((c, slot) => (c ? [{ c, slot, ovr: slotOvr(slot, ld.get(c.id)!) }] : []));
+      const go = on.reduce((a, b) => ((strong ? b.ovr > a.ovr : b.ovr < a.ovr) ? b : a));
+      team.roster[go.slot] = null;
+      released.push(go.c.id);
+    }
+  });
   next.phase = "offseason";
-  next.off = { step: "review", changes, expiring, released, draft: null, market: [] };
+  next.off = { step: "review", changes, expiring, released, draft: null, market: [], signings: [], trained: null };
   return next;
 }
 
 // ── the off-season ───────────────────────────────────────────────────────────
-/** Re-sign an expiring player of yours at his price now (if it fits under the cap), or let him go. */
-export function resign(f: Franchise, dex: Dex, id: number, keep: boolean): Franchise {
+/** Where a player is in his career: improving, at his best, or slowing down. */
+export const ageBand = (exp: number): "YOUNG" | "PRIME" | "VETERAN" =>
+  exp < FRANCHISE.dev.youngUntil ? "YOUNG" : exp >= FRANCHISE.dev.oldFrom ? "VETERAN" : "PRIME";
+
+/** Training camp: one player of yours a summer gets FRANCHISE.campBoost rating points (up to the most a player can
+ *  gain). Once a summer, any time before the season starts. */
+export function train(f: Franchise, id: number): Franchise {
+  const off = f.off, car = f.career[id] ?? { exp: 0, dev: 0 };
+  if (f.phase !== "offseason" || !off || off.trained != null || !f.teams[YOU].roster.some((c) => c?.id === id)) return f;
+  if (car.dev >= FRANCHISE.dev.max) return f;
+  const next: Franchise = structuredClone(f);
+  next.career[id] = { ...car, dev: Math.min(FRANCHISE.dev.max, car.dev + FRANCHISE.campBoost) };
+  next.off!.trained = id;
+  return next;
+}
+
+/** What an expiring player of yours asks a season for a deal of `years` seasons: his price now, dearer for a
+ *  one-year deal and cheaper for a long one (FRANCHISE.resign). */
+export const resignPrice = (f: Franchise, dex: Dex, id: number, years: number) =>
+  Math.max(SALARY_MIN, Math.round(priceOf(f, dex, id) * (FRANCHISE.resign[years] ?? 1)));
+
+/** Re-sign an expiring player of yours for `years` seasons (if the price fits under the cap), or let him go (0). */
+export function resign(f: Franchise, dex: Dex, id: number, years: number): Franchise {
   if (f.off?.step !== "resign" || !f.off.expiring.includes(id)) return f;
   const slot = f.teams[YOU].roster.findIndex((c) => c?.id === id);
-  const price = priceOf(f, dex, id);
-  if (keep && price > room(f, slot)) return f;
+  const price = resignPrice(f, dex, id, years);
+  if (years > 0 && (!(years in FRANCHISE.resign) || price > room(f, slot))) return f;
   const next: Franchise = structuredClone(f);
   const off = next.off!;
   off.expiring = off.expiring.filter((x) => x !== id);
-  if (keep) next.teams[YOU].roster[slot] = { id, salary: price, years: FRANCHISE.resignYears };
+  if (years > 0) next.teams[YOU].roster[slot] = { id, salary: price, years };
   else {
     next.teams[YOU].roster[slot] = null;
     off.released.push(id);
@@ -434,91 +474,164 @@ export const draftValue = (p: RatedPokemon, dex: Dex, evos: Map<number, RatedPok
 export const draftOnClock = (d: DraftState) => (d.picks.length < d.order.length * FRANCHISE.draftRounds ? d.order[d.picks.length % d.order.length] : null);
 export const draftLeft = (d: DraftState) => d.pool.filter((id) => !d.picks.some((p) => p.id === id));
 
+/** The pick order (the same every round). The teams that missed the playoffs draw for the first picks, one at a time:
+ *  the worst record has the most chances. Then the playoff teams, worst record first, the runners-up and the
+ *  champions last. */
+function draftOrder(f: Franchise, rng: Rng): number[] {
+  const table = standings(f).map((s) => s.team);
+  const drum = table.filter((t) => !f.seeds.includes(t)).reverse(); // worst first
+  const lottery: number[] = [];
+  while (drum.length) {
+    let r = rng.next() * ((drum.length * (drum.length + 1)) / 2), i = 0; // chances: n for the worst, down to 1
+    for (; i < drum.length - 1; i++) if ((r -= drum.length - i) < 0) break;
+    lottery.push(...drum.splice(i, 1));
+  }
+  const final = f.playoffs[f.playoffs.length - 1]?.[0];
+  const champ = final ? winner(final) : null;
+  const runner = final && champ != null ? (final.top === champ ? final.bottom : final.top) : null;
+  const rest = table.filter((t) => f.seeds.includes(t) && t !== champ && t !== runner).reverse();
+  return [...lottery, ...rest, ...(runner != null ? [runner] : []), ...(champ != null ? [champ] : [])];
+}
+
 function startDraft(f: Franchise, dex: Dex): Franchise {
   const rng = rngFor(f, 202);
   const evos = evolutionsOf(dex), taken = rostered(f), ld = leagueDex(dex, f);
-  const young = [...ld.values()].filter((p) => isEligible(p, f.mode) && !taken.has(p.id) && evos.has(p.id) && !f.off!.released.includes(p.id));
+  const young = [...ld.values()].filter((p) => isEligible(p, f.mode) && !taken.has(p.id) && evos.has(p.id) && best(p) <= FRANCHISE.rookieMax && !f.off!.released.includes(p.id));
   const cls = shuffle(rng, young).slice(0, FRANCHISE.classSize * 3).sort((a, b) => draftValue(b, ld, evos) - draftValue(a, ld, evos) || a.id - b.id).slice(0, FRANCHISE.classSize);
-  const order = standings(f).map((s) => s.team).reverse(); // the worst record picks first
-  const draft: DraftState = { order, pool: cls.map((p) => p.id), picks: [] };
+  const draft: DraftState = { order: draftOrder(f, rng), pool: cls.map((p) => p.id), picks: [] };
   return runDraft({ ...f, off: { ...f.off!, step: "draft", draft } }, dex);
 }
 
-/** Put a player on a team's open slot `slot`, or the best open slot for him. */
-function signTo(team: FTeam, p: RatedPokemon, deal: Omit<Contract, "id">, slot?: number) {
-  const open = openSlots(team);
-  const at = slot != null && open.includes(slot) ? slot : open.reduce((a, b) => (slotOvr(b, p) > slotOvr(a, p) ? b : a));
-  team.roster[at] = { id: p.id, ...deal };
-}
+const bestOpen = (team: FTeam, p: RatedPokemon) => openSlots(team).reduce((a, b) => (slotOvr(b, p) > slotOvr(a, p) ? b : a));
 
-/** CPU picks (and your pass when your roster's full) until it's your turn or the draft's over. */
+/** CPU picks until it's your turn or the draft's over. A CPU team takes the prospect its scouts like best (each
+ *  team's scouts see the class a little differently); with a full roster he takes the place of its weakest bench
+ *  player, if he's worth more (that player joins the free agents), else it passes. */
 function runDraft(f: Franchise, dex: Dex): Franchise {
   const next: Franchise = structuredClone(f);
   const d = next.off!.draft!;
   const ld = leagueDex(dex, next), evos = evolutionsOf(dex);
   for (let team = draftOnClock(d); team != null; team = draftOnClock(d)) {
+    const left = draftLeft(d).map((id) => ld.get(id)!);
+    if (team === YOU && left.length) break;
     const t = next.teams[team];
-    if (!openSlots(t).length || !draftLeft(d).length) {
-      d.picks.push({ team, id: null }); // no room: a pass
+    const rng = makeRng(mix(next.seed, next.season, 303, d.picks.length));
+    let pick: RatedPokemon | null = null, top = -Infinity;
+    for (const p of left) {
+      const v = draftValue(p, ld, evos) + rng.next() * 4;
+      if (v > top) (top = v), (pick = p);
+    }
+    if (!pick || team === YOU) {
+      d.picks.push({ team, id: null }); // nobody left
       continue;
     }
-    if (team === YOU) break;
-    const rng = makeRng(mix(next.seed, next.season, 303, d.picks.length));
-    const pick = draftLeft(d).map((id) => ld.get(id)!).reduce((a, b) => (draftValue(b, ld, evos) + rng.next() * 4 > draftValue(a, ld, evos) ? b : a));
-    signTo(t, pick, { salary: rookieSalary(pick), years: FRANCHISE.rookieYears });
-    d.picks.push({ team, id: pick.id });
+    const deal = { id: pick.id, salary: rookieSalary(pick), years: FRANCHISE.rookieYears };
+    if (openSlots(t).length) {
+      t.roster[bestOpen(t, pick)] = deal;
+      d.picks.push({ team, id: pick.id });
+      continue;
+    }
+    const bench = t.roster.map((c, s) => ({ c: c!, s })).filter((x) => x.s >= STARTERS);
+    const weak = bench.reduce((a, b) => (best(ld.get(b.c.id)!) < best(ld.get(a.c.id)!) ? b : a));
+    if (draftValue(pick, ld, evos) > best(ld.get(weak.c.id)!)) {
+      next.off!.released.push(weak.c.id);
+      t.roster[weak.s] = deal;
+      d.picks.push({ team, id: pick.id, out: weak.c.id });
+    } else d.picks.push({ team, id: null }); // nobody worth a roster spot: a pass
   }
   return next;
 }
 
-/** Your draft pick (`id` from the class, if you have the room and the cap space), or a pass (null). */
-export function draftPick(f: Franchise, dex: Dex, id: number | null): Franchise {
+/** Your draft pick: `id` from the class onto roster slot `slot` (your best open slot if not given), or a pass (null).
+ *  A slot that's taken can be picked too: that player is released to make room (he joins the free agents). The
+ *  rookie's deal must fit under the cap there. */
+export function draftPick(f: Franchise, dex: Dex, id: number | null, slot?: number): Franchise {
   const d = f.off?.draft;
   if (f.off?.step !== "draft" || !d || draftOnClock(d) !== YOU) return f;
   const next: Franchise = structuredClone(f);
-  const nd = next.off!.draft!;
+  let out: number | undefined;
   if (id != null) {
-    const p = leagueDex(dex, f).get(id);
-    const open = openSlots(f.teams[YOU]);
-    if (!p || !draftLeft(d).includes(id) || !open.length || rookieSalary(p) > room(f, open[0])) return f;
-    signTo(next.teams[YOU], p, { salary: rookieSalary(p), years: FRANCHISE.rookieYears });
+    const p = leagueDex(dex, f).get(id), mine = f.teams[YOU];
+    const at = slot ?? (openSlots(mine).length && p ? bestOpen(mine, p) : -1);
+    if (!p || !draftLeft(d).includes(id) || !(at >= 0 && at < SLOTS.length) || rookieSalary(p) > room(f, at)) return f;
+    out = mine.roster[at]?.id;
+    if (out != null) next.off!.released.push(out);
+    next.teams[YOU].roster[at] = { id, salary: rookieSalary(p), years: FRANCHISE.rookieYears };
   }
-  nd.picks.push({ team: YOU, id });
+  next.off!.draft!.picks.push({ team: YOU, id, ...(out != null ? { out } : {}) });
   return runDraft(next, dex);
 }
 
-/** Free agency: everyone let go this summer and the undrafted class, plus a sample of other unsigned Pokémon. */
+/** Free agency: everyone let go this summer and the undrafted class, a sample of other unsigned Pokémon, and the
+ *  cheapest ones around (so there's always someone a tight budget can afford). */
 function startSigning(f: Franchise, dex: Dex): Franchise {
   const rng = rngFor(f, 404);
   const taken = rostered(f), ld = leagueDex(dex, f);
   const d = f.off!.draft;
   const left = new Set([...f.off!.released, ...(d ? draftLeft(d) : [])].filter((id) => !taken.has(id)));
-  const others = shuffle(rng, [...ld.values()].filter((p) => isEligible(p, f.mode) && !taken.has(p.id) && !left.has(p.id))).slice(0, 30);
-  const market = [...left, ...others.map((p) => p.id)].sort((a, b) => best(ld.get(b)!) - best(ld.get(a)!) || a - b);
-  return { ...f, off: { ...f.off!, step: "sign", market } };
+  const free = [...ld.values()].filter((p) => isEligible(p, f.mode) && !taken.has(p.id) && !left.has(p.id));
+  const cheap = [...free].sort((a, b) => salary(a) - salary(b) || a.id - b.id).slice(0, 6);
+  const others = shuffle(rng, free).slice(0, 30);
+  const market = [...new Set([...left, ...others.map((p) => p.id), ...cheap.map((p) => p.id)])].sort((a, b) => best(ld.get(b)!) - best(ld.get(a)!) || a - b);
+  return { ...f, off: { ...f.off!, step: "sign", market, signings: [] } };
 }
 
-/** Sign a free agent at his price for FRANCHISE.signYears seasons, on open slot `slot` (or your best one for him). */
+/** The other teams make a move: each CPU team with an open slot signs the free agent nearest its level for that
+ *  slot, if there's one near it (the rest of its openings are filled when the season starts). `f` is changed. */
+function cpuSignRound(f: Franchise, dex: Dex): Franchise {
+  const off = f.off!, ld = leagueDex(dex, f), band = difficultyOf(f.level);
+  const rng = makeRng(mix(f.seed, f.season, 707, off.signings.length));
+  for (const t of shuffle(rng, f.teams.map((_, i) => i).filter((i) => i !== YOU))) {
+    const team = f.teams[t], slot = openSlots(team)[0];
+    if (slot == null) continue;
+    const target = band.min + rng.next() * (band.max - band.min);
+    const near = off.market.map((id) => ld.get(id)!).filter((p) => Math.abs(slotOvr(slot, p) - target) <= 6);
+    if (!near.length) continue;
+    const p = near.reduce((a, b) => (Math.abs(slotOvr(slot, b) - target) < Math.abs(slotOvr(slot, a) - target) ? b : a));
+    team.roster[slot] = { id: p.id, salary: salary(p), years: inRange(rng, FRANCHISE.years) };
+    off.market = off.market.filter((x) => x !== p.id);
+    off.signings.push({ team: t, id: p.id });
+  }
+  return f;
+}
+
+/** Sign a free agent at his price for FRANCHISE.signYears seasons on roster slot `slot` (your best open slot if not
+ *  given). A slot that's taken can be used too: that player is released to make room and joins the free agents. Then
+ *  the other teams make their moves. */
 export function sign(f: Franchise, dex: Dex, id: number, slot?: number): Franchise {
   if (f.off?.step !== "sign" || !f.off.market.includes(id)) return f;
-  const p = leagueDex(dex, f).get(id)!, open = openSlots(f.teams[YOU]);
-  if (!open.length || salary(p) > room(f, open[0])) return f;
+  const ld = leagueDex(dex, f), p = ld.get(id)!, mine = f.teams[YOU];
+  const at = slot ?? (openSlots(mine).length ? bestOpen(mine, p) : -1);
+  if (!(at >= 0 && at < SLOTS.length) || salary(p) > room(f, at)) return f;
   const next: Franchise = structuredClone(f);
-  signTo(next.teams[YOU], p, { salary: salary(p), years: FRANCHISE.signYears }, slot);
-  next.off!.market = next.off!.market.filter((x) => x !== id);
-  return next;
+  const off = next.off!, out = mine.roster[at]?.id;
+  off.market = off.market.filter((x) => x !== id);
+  if (out != null) {
+    off.released.push(out);
+    off.market = [...off.market, out].sort((a, b) => best(ld.get(b)!) - best(ld.get(a)!) || a - b);
+  }
+  next.teams[YOU].roster[at] = { id, salary: salary(p), years: FRANCHISE.signYears };
+  off.signings.push({ team: YOU, id, ...(out != null ? { out } : {}) });
+  return cpuSignRound(next, dex);
 }
 
 /** Fill your open slots from the free agents, in order: the best player for each that fits, spreading what's left of
- *  the cap (no one takes more than twice an even share). Slots nobody affordable fits stay open. */
+ *  the cap (no one takes more than twice an even share). If nobody on the market fits a slot, the cheapest unsigned
+ *  Pokémon in the league is brought in for it. */
 export function autoSign(f: Franchise, dex: Dex): Franchise {
   if (f.off?.step !== "sign") return f;
   const ld = leagueDex(dex, f);
   for (const slot of openSlots(f.teams[YOU])) {
     const empties = openSlots(f.teams[YOU]).length, r = room(f, slot);
     const allowance = Math.min(r, Math.ceil((2 * (r + (empties - 1) * SALARY_MIN)) / empties));
-    const fits = f.off!.market.map((id) => ld.get(id)!).filter((p) => salary(p) <= allowance);
-    if (!fits.length) continue;
+    let fits = f.off!.market.map((id) => ld.get(id)!).filter((p) => salary(p) <= allowance);
+    if (!fits.length) {
+      const taken = rostered(f);
+      const cheapest = [...ld.values()].filter((p) => isEligible(p, f.mode) && !taken.has(p.id)).reduce((a, b) => (salary(b) < salary(a) ? b : a));
+      if (salary(cheapest) > r) continue;
+      f = { ...f, off: { ...f.off!, market: [...f.off!.market, cheapest.id] } };
+      fits = [cheapest];
+    }
     const pick = fits.reduce((a, b) => (slotOvr(slot, b) > slotOvr(slot, a) ? b : a));
     f = sign(f, dex, pick.id, slot);
   }
@@ -614,6 +727,11 @@ export function checkFranchise(x: unknown, dex: Dex): Franchise | null {
     const ids = f.teams.flatMap((t) => t.roster.flatMap((c) => (c ? [c.id] : [])));
     if (new Set(ids).size !== ids.length) return null;
     if ((f.phase === "offseason") !== (f.off !== null)) return null;
+    if (f.off) {
+      // (saves from before free-agency rounds and training camp)
+      f.off.signings = isArr(f.off.signings) ? f.off.signings.filter((x) => team(x?.team) && dex.has(x.id)) : [];
+      f.off.trained = dex.has(f.off.trained as number) ? f.off.trained : null;
+    }
     return f;
   } catch {
     return null;

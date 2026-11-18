@@ -297,6 +297,27 @@ canvas {
   }
 }
 
+/* the franchise's summer review: a Pokémon evolving. The old form flickers to a white shape, faster and faster, then
+   the new one pops in (FranchisePage.tsx sets the delay so they go one after another, and plays a jingle at 1.75 s) */
+.evo-old { animation: evo-old 2.2s steps(1) both; }
+.evo-new { display: inline-flex; animation: evo-new 2.2s steps(1) both; }
+@keyframes evo-old {
+  0% { opacity: 1; filter: none; }
+  18%, 36%, 50%, 60%, 68%, 74% { filter: brightness(0) invert(1); }
+  27%, 43%, 55%, 64%, 71% { filter: none; }
+  79%, 100% { opacity: 0; }
+}
+@keyframes evo-new {
+  0%, 78% { opacity: 0; }
+  79% { opacity: 1; filter: brightness(0) invert(1); transform: scale(1.3); }
+  86% { opacity: 1; filter: none; transform: scale(1.15); }
+  93%, 100% { opacity: 1; filter: none; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .evo-old { display: none; }
+  .evo-new { animation: none; }
+}
+
 /* ── the title screen (Title.tsx): everything moves in hard pixel steps ── */
 /* each moving piece gets its own compositor layer, so animating it never repaints the art around it */
 .t-anim { will-change: transform; }

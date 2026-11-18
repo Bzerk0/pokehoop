@@ -127,29 +127,36 @@ export const DIFFICULTIES = [
 export const CPU_SAMPLE = 15;
 
 /** FRANCHISE mode (franchise.ts): an 8-team league (yours and 7 CPU teams at the difficulty you pick), a double
- *  round robin, then the top `playoffTeams` play best-of-(2 × seriesWins − 1) series. Contracts run `years` seasons
- *  (a random length in that range: CPU signings and the first season's), `resignYears` when you re-sign one, and
- *  rookies `rookieYears` at `rookieScale` × their price. CPU teams keep an expiring player with chance `cpuKeep`.
- *  At each season's end a Pokémon with an evolution evolves with chance base + minutes × (its minutes a game ÷
- *  fullAt seconds, at most 1); and every player's rating moves by a whole number in the range for his age (seasons in
- *  the league), kept within dev.min…dev.max in all. The rookie draft: `draftRounds` rounds, worst record first, from
- *  a class of `classSize` young Pokémon (ones that can still evolve). */
+ *  round robin, then the top `playoffTeams` play best-of-(2 × seriesWins − 1) series. League games are simmed at the
+ *  live game's pace (LIVE.simPace). Contracts run `years` seasons (a random length in that range: CPU signings and the
+ *  first season's); re-signing one of yours costs his price × `resign[years]` (a longer deal is cheaper a season, a
+ *  one-year deal dearer); free agents sign for `signYears`; rookies `rookieYears` at `rookieScale` × their price. CPU
+ *  teams keep an expiring player with chance `cpuKeep`, and stay near the league's level (`cpuSlack`, `cpuCuts`). At each season's end a Pokémon with an evolution evolves with
+ *  chance base + minutes × (its minutes a game ÷ fullAt seconds, at most 1); and every player's rating moves by a
+ *  whole number in the range for his age (seasons in the league), kept within dev.min…dev.max in all. Training camp:
+ *  one player of yours a summer gets `campBoost` more. The rookie draft: `draftRounds` rounds from a class of
+ *  `classSize` young Pokémon (ones that can still evolve); the teams that missed the playoffs draw for the first
+ *  picks (the worst record has the most chances), then the playoff teams, the champions last. */
 export const FRANCHISE = {
   teams: 8,
   playoffTeams: 4,
   seriesWins: 2,
   years: [1, 4] as [number, number],
-  resignYears: 2,
+  resign: { 1: 1.15, 2: 1, 3: 0.9 } as Record<number, number>,
   signYears: 2,
   rookieYears: 3,
   rookieScale: 0.5,
   cpuKeep: 0.7,
+  cpuSlack: 2, // a CPU team this far outside its level's OVR band sheds players in the summer…
+  cpuCuts: 4, // …at most this many
   evolve: { base: 0.15, minutes: 0.6, fullAt: 270 },
   dev: { youngUntil: 2, oldFrom: 6, young: [0, 3], prime: [-1, 2], old: [-3, 0], min: -10, max: 8 } as {
     youngUntil: number; oldFrom: number; young: [number, number]; prime: [number, number]; old: [number, number]; min: number; max: number;
   },
+  campBoost: 2,
   draftRounds: 2,
   classSize: 20,
+  rookieMax: 80, // nobody rated above this is a rookie (a Rhydon is no prospect)
 };
 
 /** The game simulator (PLAN.md §9). Make chances are logistic around the base rates: each point the shooter's
@@ -243,9 +250,9 @@ export const LIVE = {
   sprintDrain: 2.5, // × while sprinting (turbo)
   recover: 0.6, // energy back per second on the bench
   tiredSpeed: 0.85, // top speed share at zero energy (ratings use SIM.tiredFloor)
-  // SIM THE REST plays at the live game's pace: about 46 possessions in a live game (npm run balance:live) against
-  // the sim's ~160, so the score stays on the same scale after the hand-over
-  simPace: 0.29,
+  // SIM THE REST (and every franchise league game) plays at the live game's scoring pace: a live 5v5 CPU game averages
+  // ~37 points a team (npm run balance:live), which the sim reaches at this share of its ~160 possessions
+  simPace: 0.44,
   // ON FIRE (Phase 9, PLAN.md §3): this many straight makes by one Pokémon, until the other team scores
   fireAfter: 3,
   fireWindow: 1.5, // × the green zone while on fire

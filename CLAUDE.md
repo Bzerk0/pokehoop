@@ -237,22 +237,38 @@
   All tuning in `ratingConfig.ts` (DIFFICULTIES, SIM). `npm run balance` sims 10,000 games; keep a 15-OVR favourite
   at 75–90% wins and team scores at 75–110 (sim.test.ts checks both). Page: `/play` (PlayPage: Pre-Game + Results).
 - FRANCHISE (v2): `src/core/franchise.ts` (pure, seeded; numbers in ratingConfig `FRANCHISE`), page `/franchise`
-  (`FranchisePage.tsx`, reached from the Play page's FRANCHISE card), saved in localStorage `s5p-franchise-v1`
-  (`checkFranchise` on load). An 8-team league: your team (any ready team from `yourTeams`) + 7 `cpuTeam`s at a
-  difficulty, every Pokémon on one team at most; a double round robin (`schedule`, 14 rounds), `standings`, then
-  the top 4 in best-of-3 series (`slate` = the games on now: the season round, or each live series' next game,
-  series kept in step). Your game: PLAY IT (ArcadePage with `ArcadeSetup.franchise`: key, season, both rosters'
-  career; the result is recorded with `recordYours` + `finishSlate` when the game ends; no rematch) or SIM GAME
-  (`simYours`, TipOff playback + Results). Live games score at live pace (~25–40 a team), so their box scores are
-  lower than simmed ones. Contracts (salary, years) per roster slot; your cap is `room()` (expired deals don't count).
+  (`FranchisePage.tsx`, reached from the Play page's FRANCHISE card and the draft's START A FRANCHISE buttons, which
+  send `state.team`), saved in localStorage `s5p-franchise-v1` (`checkFranchise` on load; it fills in fields older
+  saves lack). An 8-team league: your team (any ready team from `yourTeams`) + 7 `cpuTeam`s at a difficulty, every
+  Pokémon on one team at most; a double round robin (`schedule`, 14 rounds), `standings`, then the top 4 in
+  best-of-3 series (`slate` = the games on now: the season round, or each live series' next game, series kept in
+  step). Your game: PLAY IT (ArcadePage with `ArcadeSetup.franchise`: key, season, both rosters' career; the result
+  is recorded with `recordYours` + `finishSlate` when the game ends; no rematch) or SIM GAME (`simYours`, TipOff
+  playback + Results). Every league game is simmed at the live game's pace (`LIVE.simPace` 0.44 = ~37 points a team,
+  measured with balance:live), so a game you play and one you sim score alike. Contracts (salary, years) per roster
+  slot; your cap is `room(slot)` (the cap less the other deals, keeping the minimum salary for every other slot
+  that's open or expiring: a soak test found re-signing could otherwise leave the roster unfillable).
   The off-season (`off.step`: review → resign → draft → sign → `nextStep` starts the next season): everyone ages a
-  year (`career` exp, `dev` rating points by age band; `leagueDex` adds dev to every rating, used by sims, prices
-  and live games), Pokémon evolve along `from` (data: what each evolves from; Alolan forms from Alolan
+  year (`career` exp, `dev` rating points by age band, `ageBand`; `leagueDex` adds dev to every rating, used by
+  sims, prices and live games), Pokémon evolve along `from` (data: what each evolves from; Alolan forms from Alolan
   pre-evolutions; ten evolutions that need a missing regional form are cut in build-data.ts) with a chance set by
-  minutes played; CPU teams keep expiring players with `cpuKeep`; a rookie draft (worst record first, young
-  Pokémon that can still evolve, `potential` = best reachable OVR, half-price 3-season deals); free agency (the
-  released, the undrafted and a sample of unsigned Pokémon; `autoSign`); CPU teams refill near their band.
-  `history` keeps each season's champion, your finish and the MVP (`efficiency`).
+  minutes played. CPU teams keep expiring players with `cpuKeep` and are held near the league's OVR band (`cpuSlack`,
+  `cpuCuts`: a team that's grown too strong releases its best players to the free agents; without it a ROOKIE league
+  was 80+ OVR in three seasons). REVIEW: the champions, MVP, your players' cards (evolutions play `.evo-old` /
+  `.evo-new` in index.css) and training camp (`train`: one player a summer, +`campBoost`). RE-SIGN: `resign(id,
+  years)` for 1–3 seasons at `resignPrice` (longer = cheaper a season), 0 = let go. DRAFT: `draftOrder` (a weighted
+  lottery among the non-playoff teams, then playoff teams, champions last), a class of young Pokémon rated at most
+  `rookieMax` that can still evolve (`potential` = best reachable OVR; half-price 3-season deals); `draftPick(id,
+  slot)` may go over a player, who is released; CPU teams take their scouts' favourite (value + noise, scored once
+  each) and with a full roster replace their weakest bench player if the rookie's worth more. FREE AGENCY:
+  `sign(id, slot)` (also over a player), after which `cpuSignRound` lets each CPU team with an opening sign someone
+  near its band (`off.signings` is the log); `autoSign`; CPU openings left are filled at `startSeason`. `history`
+  keeps each season's champion, your finish and the MVP (`efficiency`). A five-season auto-manager soak test in
+  franchise.test.ts checks rosters, the cap and saves stay sound: re-run it after rule changes.
+- The draft room (`src/ui/components/DraftRoom.tsx`, with `useTicker`): status bar + pick order, the board of cards,
+  the picks ticking in, your roster row (choose a card, then a spot; Enter = best fit; a taken spot shows REPLACE
+  when `canPlace` allows it). The FULL DRAFT (`FullDraftView`), the franchise's rookie draft and its free agency all
+  render through it so they look and work alike: change the look there, not in the three callers.
 - Shared UI: `Modal.tsx` (pop-up window, PlayerModal stat card, the "i" StatsButton), `ProfOak.tsx` (warnings in a
   speech bubble from the left edge; sprite `public/art/oak.png`, cropped from `public/art/oak-sheet.png`), `ChemistryList.tsx`. Free Build's page doesn't
   scroll on desktop: only the picker list does.

@@ -399,6 +399,10 @@ export function DraftPage() {
         <section className="mb-4 border-4 border-black bg-red px-4 py-5" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
           <p className="m-0 font-head text-[24px] leading-[1.3] text-white sm:text-[32px]">DRAFT YOUR STARTING 5</p>
           <p className="m-0 mt-1 text-[24px] text-white">ARCADE DRAFT: 8 pulls of the slot machine. FULL DRAFT: a real draft against 7 CPU teams.</p>
+          <p className="m-0 mt-2 flex flex-wrap items-center gap-2 text-[24px] text-white">
+            <span className="border-2 border-black bg-purple px-2 font-head text-[12px] leading-[24px] text-white">FRANCHISE</span>
+            Then take the team you draft into a franchise and run it season after season.
+          </p>
         </section>
         {last && (() => {
           const grade = draftGrade(teamRating(last, dex)!);
@@ -426,6 +430,7 @@ export function DraftPage() {
               </div>
               <div className="ml-auto flex flex-wrap gap-2">
                 <button className="px-btn !bg-gold !text-black" onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}>TEST YOUR TEAM <Arrow /></button>
+                <button className="px-btn !bg-purple !text-white" onClick={() => (selectBlip(), navigate("/franchise", { state: { team: "draft" } }))}>START A FRANCHISE <Arrow /></button>
                 <button className="px-btn" onClick={() => (selectBlip(), setShowResults(true))}>VIEW RESULTS</button>
               </div>
             </section>
@@ -554,6 +559,23 @@ export function DraftPage() {
             onClick={() => (selectBlip(), navigate("/play", { state: { team: "draft" } }))}
           >
             TEST YOUR TEAM <Arrow />
+          </button>
+        </section>
+
+        {/* the long game: this team into a franchise */}
+        <section className="mb-4 flex flex-wrap items-center gap-4 border-4 border-black bg-purple p-4" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
+          <div className="flex min-w-[260px] flex-1 flex-col gap-2">
+            <p className="m-0 font-head text-[20px] leading-[1.3] text-white">TAKE THIS TEAM INTO A FRANCHISE</p>
+            <p className="m-0 text-[22px] leading-[22px] text-white">
+              Run it season after season in an 8-team league: play the games, chase the title, watch your Pokémon evolve, and rebuild in the summer.
+            </p>
+          </div>
+          <button
+            className="offer cursor-pointer border-4 border-black bg-white px-5 py-3 font-head text-[16px] text-black sm:text-[20px]"
+            style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}
+            onClick={() => (selectBlip(), navigate("/franchise", { state: { team: "draft" } }))}
+          >
+            START A FRANCHISE WITH THIS TEAM <Arrow />
           </button>
         </section>
 

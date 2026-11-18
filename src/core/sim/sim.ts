@@ -211,7 +211,8 @@ export function simFrom(state: GameState, period: number, elapsed: number, seed:
   return simRest(s, seed);
 }
 
-/** A whole game from tip-off. Same lineups and seed, same game. */
-export const simGame = (home: Lineup, away: Lineup, dex: Dex, seed: number) => simRest(startGame(home, away, dex), seed);
+/** A whole game from tip-off. Same lineups and seed, same game. `pace` × the possessions (franchise games are played
+ *  at the live game's pace, so a simmed game and one you play score on the same scale). */
+export const simGame = (home: Lineup, away: Lineup, dex: Dex, seed: number, pace?: number) => simRest({ ...startGame(home, away, dex), pace }, seed);
 
 export type { Line };
