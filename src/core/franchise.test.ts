@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  autoSign, checkFranchise, draftLeft, draftOnClock, draftPick, draftValue, evolutionsOf, finishSlate, leagueDex, newLeague, nextStep,
+  autoSign, lineupOf, checkFranchise, draftLeft, draftOnClock, draftPick, draftValue, evolutionsOf, finishDay, finishSlate, leagueDex, newLeague, nextStep,
   openSlots, payroll, potential, record, recordYours, release, resign, resignPrice, room, rookieSalary, rostered, seriesWins, sign, simPhase,
   simYours, slate, standings, swap, train, winner, YOU, yourGame, type Franchise,
 } from "./franchise.ts";
-import { autoFill, dexOf, emptyLineup, problems, salary, SLOTS } from "./lineup.ts";
+import { autoFill, decodeLineup, dexOf, encodeLineup, emptyLineup, problems, salary, SLOTS } from "./lineup.ts";
 import { FRANCHISE, SALARY_CAP, SALARY_MIN } from "./ratingConfig.ts";
 import { rateAll } from "./ratings.ts";
 import { simGame } from "./sim/sim.ts";
@@ -44,6 +44,11 @@ describe("a new league", () => {
 });
 
 describe("the season", () => {
+  it("your roster as it stands saves as a team and loads back the same (what SAVE TEAM stores)", () => {
+    const l = lineupOf(league(), YOU);
+    expect(decodeLineup(encodeLineup(l), 32)?.ids).toEqual(l.ids);
+  });
+
   it("is the same every time from the same seed", () => {
     expect(toOffseason(league())).toEqual(toOffseason(league()));
   });
@@ -104,7 +109,7 @@ describe("the season", () => {
       const counts = f.playoffs[f.playoffs.length - 1].map((s) => s.games.length);
       const mine = yourGame(f);
       if (mine) f = simYours(f, dex)!.f;
-      const after = finishSlate(f, dex);
+      const after = mine ? finishDay(f, dex) : finishSlate(f, dex);
       if (after.phase === "playoffs" && after.playoffs.length === f.playoffs.length) {
         // every live series played exactly one more game than at the start of the day
         after.playoffs[after.playoffs.length - 1].forEach((s, i) => {
@@ -124,7 +129,7 @@ describe("the season", () => {
       expect(mineScore).toBe(result.teams[0].periods.reduce((a, b) => a + b, 0));
       expect(result.teams[0].name).toBe(f.teams[YOU].name);
       expect(yourGame(next)).toBeNull();
-      f = finishSlate(next, dex);
+      f = finishDay(next, dex);
     }
   });
 });

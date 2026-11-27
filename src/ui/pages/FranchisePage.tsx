@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { allowedIn, type Difficulty } from "../../core/cpuTeam.ts";
 import {
-  ageBand, autoSign, checkFranchise, draftOnClock, draftPick, efficiency, evolutionsOf, finishSlate, leaders, leagueDex, lineupOf, newLeague,
-  nextStep, opponentIn, openSlots, payroll, potential, release, resign, resignPrice, room, rookieSalary, seriesWins, sign, simPhase, simYours,
+  ageBand, autoSign, checkFranchise, draftOnClock, draftPick, efficiency, evolutionsOf, finishDay, finishSlate, leaders, leagueDex, lineupOf, newLeague,
+  nextStep, opponentIn, openSlots, payroll, potential, release, resign, resignPrice, room, rookieSalary, seriesWins, sign, simYours,
   standings, swap, train, winner, YOU, yourGame, type Franchise, type STAT_KEYS, type Totals,
 } from "../../core/franchise.ts";
 import { dexOf, problems, salary, SLOTS, slotOvr, STARTERS, teamOvr, type Lineup } from "../../core/lineup.ts";
 import { DIFFICULTIES, FRANCHISE, SALARY_CAP } from "../../core/ratingConfig.ts";
 import type { GameResult } from "../../core/sim/sim.ts";
 import type { RatedPokemon } from "../../core/types.ts";
-import { clearFranchise, loadFranchise, saveFranchise } from "../../storage.ts";
+import { clearFranchise, loadFranchise, saveFranchise, saveTeam } from "../../storage.ts";
 import { useMusic } from "../bgm.ts";
 import { Arrow } from "../components/Arrow.tsx";
 import { reducedMotion } from "../components/Cabinet3D.tsx";
@@ -63,7 +63,8 @@ export function FranchisePage() {
   useMusic("menu");
   const navigate = useNavigate();
   // sent with a team (the draft's START A FRANCHISE): that team is picked at the start
-  const wanted = (useLocation().state as { team?: string } | null)?.team;
+  const nav = useLocation().state as { team?: string; startOver?: boolean } | null;
+  const wanted = nav?.team, startOver = !!nav?.startOver; // (startOver: the Play menu's START A NEW FRANCHISE)
   const { data, error } = useRated();
   const dex = useMemo(() => (data ? dexOf(data) : null), [data]);
   const [f, setF] = useState<Franchise | null | undefined>(undefined); // undefined: not read yet
@@ -76,8 +77,8 @@ export function FranchisePage() {
     if (!dex) return;
     const saved = checkFranchise(loadFranchise(), dex);
     setF(saved);
-    if (saved && wanted) setQuitting(true); // a league's already going: ask before starting over with the new team
-  }, [dex, wanted]);
+    if (saved && (wanted || startOver)) setQuitting(true); // a league's already going: ask before starting over with the new team
+  }, [dex, wanted, startOver]);
   const ld = useMemo(() => (f && dex ? leagueDex(dex, f) : null), [f, dex]);
   const update = (next: Franchise) => {
     if (next === f) return;
@@ -137,11 +138,6 @@ export function FranchisePage() {
         />
       )}
       {ctx && (ctx.f.phase === "offseason" ? <Offseason ctx={ctx} /> : <Hub ctx={ctx} onShow={setShown} />)}
-      {ctx && (
-        <div className="mt-6 flex justify-end">
-          <button className="px-btn !text-[18px]" onClick={() => (moveBlip(), setQuitting(true))}>START A NEW FRANCHISE</button>
-        </div>
-      )}
       {saveFailed && <p className="mt-3 text-[20px] text-red">Couldn't save: this browser is blocking storage. The league lasts until you leave this page.</p>}
       {card && <PlayerModal p={card} onClose={() => setCard(null)} />}
       {quitting && (
@@ -151,7 +147,7 @@ export function FranchisePage() {
             <p>This league, its seasons and its history will be gone for good.</p>
             <div className="flex flex-wrap gap-2">
               <button className="px-btn" onClick={() => (backBlip(), clearFranchise(), setF(null), setQuitting(false))}>YES, START OVER</button>
-              <button className="px-btn" onClick={() => (setQuitting(false), wanted && navigate("/franchise", { replace: true }))}>KEEP PLAYING</button>
+              <button className="px-btn" onClick={() => (setQuitting(false), (wanted || startOver) && navigate("/franchise", { replace: true }))}>KEEP PLAYING</button>
             </div>
           </div>
         </Modal>
@@ -271,7 +267,7 @@ function Hub({ ctx, onShow }: { ctx: Ctx; onShow: (s: { result: GameResult; home
 }
 
 function NextGame({ ctx, onShow }: { ctx: Ctx; onShow: (s: { result: GameResult; home: Lineup; away: Lineup; playback: boolean }) => void }) {
-  const { f, dex, ld, update } = ctx;
+  const { f, dex, ld, update, openCard } = ctx;
   const navigate = useNavigate();
   const mine = yourGame(f);
   const table = standings(f);
@@ -301,11 +297,32 @@ function NextGame({ ctx, onShow }: { ctx: Ctx; onShow: (s: { result: GameResult;
     if (!r) return;
     selectBlip();
     const opp = opponentIn(mine.game);
-    update(finishSlate(r.f, dex));
+    update(finishDay(r.f, dex));
     onShow({ result: r.result, home: lineupOf(f, YOU), away: lineupOf(f, opp), playback: !reducedMotion() });
   };
   const simOn = () => (selectBlip(), update(finishSlate(f, dex)));
-  const simAll = () => (selectBlip(), update(simPhase(f, dex)));
+  // SIM TO THE END plays on a week at a time (so you see it go) until the phase changes
+  const [simming, setSimming] = useState<Franchise["phase"] | null>(null);
+  useEffect(() => {
+    if (simming == null) return;
+    if (f.phase !== simming) return void setSimming(null);
+    const t = setTimeout(() => update(finishSlate(f, dex)), reducedMotion() ? 0 : 220);
+    return () => clearTimeout(t);
+  }, [simming, f]);
+  const simAll = () => (selectBlip(), setSimming(f.phase));
+  if (simming != null) {
+    const total = f.phase === "season" ? f.schedule.length : PLAYOFF_ROUNDS, at = f.phase === "season" ? f.round : round + 1;
+    return (
+      <Panel title={f.phase === "season" ? "SIMMING THE SEASON…" : "SIMMING THE PLAYOFFS…"}>
+        <div className="flex flex-col gap-2" role="status">
+          <p className="m-0 text-[22px] text-white">{f.phase === "season" ? `WEEK ${Math.min(at + 1, total)} OF ${total}` : roundName(round)}</p>
+          <div className="flex gap-[3px]" aria-hidden>
+            {Array.from({ length: total }, (_, i) => <span key={i} className={`h-[16px] flex-1 ${i < at ? "bg-gold" : "bg-slate"}`} />)}
+          </div>
+        </div>
+      </Panel>
+    );
+  }
 
   if (!mine) {
     // the playoffs, and you're not on: missed them, knocked out, your series waiting for the other to catch up, or
@@ -314,7 +331,7 @@ function NextGame({ ctx, onShow }: { ctx: Ctx; onShow: (s: { result: GameResult;
     const text = !f.seeds.includes(YOU)
       ? "You missed the playoffs. Watch how it ends, then get ready for the summer."
       : out
-        ? "Your season is over. Watch how it ends."
+        ? "Your season is over. Watch how it ends?"
         : series && winner(series) == null
           ? `The other series catches up first. Your game ${series.games.length + 1} is next.`
           : "You're through! Waiting on the other series.";
@@ -337,12 +354,12 @@ function NextGame({ ctx, onShow }: { ctx: Ctx; onShow: (s: { result: GameResult;
       <span className="max-w-full font-head text-[12px] leading-[18px]"><TeamTag f={f} t={t} /></span>
       <span className="text-[20px] text-cloud">{rec(t)} · OVR <span className="text-gold">{teamOvr(lineupOf(f, t), ld)}</span></span>
       <span className="flex flex-wrap justify-center gap-1">
-        {f.teams[t].roster.slice(0, STARTERS).map((c) => c && ld.get(c.id) && <Face key={c.id} p={ld.get(c.id)!} size={48} />)}
+        {f.teams[t].roster.slice(0, STARTERS).map((c) => c && ld.get(c.id) && <Face key={c.id} p={ld.get(c.id)!} size={48} onOpen={openCard} />)}
       </span>
     </div>
   );
   const [top, bottom] = series ? seriesWins(series) : [0, 0];
-  const seriesLine = series && `GAME ${series.games.length + 1} · SERIES ${series.top === YOU ? top : bottom}-${series.top === YOU ? bottom : top}`;
+  const seriesLine = series && `BEST OF ${FRANCHISE.seriesWins * 2 - 1} · GAME ${series.games.length + 1} · SERIES ${series.top === YOU ? top : bottom}-${series.top === YOU ? bottom : top}`;
   return (
     <Panel title={`${label}${seriesLine ? ` · ${seriesLine}` : ""}`}>
       <div className="flex flex-col gap-3">
@@ -381,30 +398,57 @@ function LastRound({ f }: { f: Franchise }) {
   );
 }
 
+/** The playoffs as a sports bracket: a column a round, each series centred between the two that feed it, joined by
+ *  pixel connectors (a "]" from each pair into the next round's series). */
 function Bracket({ f }: { f: Franchise }) {
+  const box = (children: ReactNode, key?: number) => <div key={key} className="border-2 border-slate bg-black text-[20px] leading-[22px]">{children}</div>;
+  const head = (text: string) => <span className="font-head text-[10px] leading-[14px] text-steel">{text}</span>;
+  const rounds = Array.from({ length: PLAYOFF_ROUNDS }, (_, r) => r);
   return (
-    <Panel title="PLAYOFFS">
-      <div className="grid gap-3 sm:grid-cols-2">
-        {Array.from({ length: PLAYOFF_ROUNDS }, (_, r) => (
-          <div key={r} className="flex flex-col gap-2">
-            <span className="font-head text-[10px] text-steel">{roundName(r)}</span>
-            {(f.playoffs[r] ?? []).map((s, i) => {
-              const wins = seriesWins(s), w = winner(s);
-              return (
-                <div key={i} className="border-2 border-slate bg-black text-[20px] leading-[22px]">
-                  {([s.top, s.bottom] as const).map((t, k) => (
-                    <div key={t} className={`flex items-center gap-2 px-2 ${w != null && w !== t ? "opacity-50" : ""}`}>
-                      <span className="text-steel">{f.seeds.indexOf(t) + 1}</span>
-                      <span className="flex min-w-0 flex-1"><TeamTag f={f} t={t} /></span>
-                      <span className={w === t ? "text-gold" : "text-white"}>{wins[k]}</span>
-                    </div>
-                  ))}
+    <Panel title={`PLAYOFFS · EVERY SERIES IS BEST OF ${FRANCHISE.seriesWins * 2 - 1}`}>
+      <div className="flex items-stretch">
+        {rounds.map((r) => {
+          const count = 2 ** (PLAYOFF_ROUNDS - 1 - r);
+          return (
+            <Fragment key={r}>
+              {r > 0 && (
+                // the connectors into this round: one "]" per series, from its two feeders
+                <div className="flex w-[28px] shrink-0 flex-col gap-2" aria-hidden>
+                  {head(" ")}
+                  <div className="flex flex-1 flex-col">
+                    {Array.from({ length: count }, (_, i) => (
+                      <div key={i} className="flex flex-1 items-center">
+                        <div className="relative h-1/2 w-[14px] border-y-4 border-r-4 border-slate">
+                          <span className="absolute -right-[14px] top-1/2 h-[4px] w-[14px] -translate-y-1/2 bg-slate" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              );
-            })}
-            {!f.playoffs[r] && <span className="text-[20px] text-steel">To be decided</span>}
-          </div>
-        ))}
+              )}
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                {head(roundName(r))}
+                <div className="flex flex-1 flex-col justify-around gap-2">
+                  {Array.from({ length: count }, (_, i) => {
+                    const s = f.playoffs[r]?.[i];
+                    if (!s) return box(<div className="px-2 py-[11px] text-steel">TO BE DECIDED</div>, i);
+                    const wins = seriesWins(s), w = winner(s);
+                    return box(
+                      ([s.top, s.bottom] as const).map((t, k) => (
+                        <div key={t} className={`flex items-center gap-2 px-2 ${w != null && w !== t ? "opacity-50" : ""} ${t === YOU ? "bg-navy" : ""}`}>
+                          <span className="text-steel">{f.seeds.indexOf(t) + 1}</span>
+                          <span className="flex min-w-0 flex-1"><TeamTag f={f} t={t} /></span>
+                          <span className={w === t ? "text-gold" : "text-white"}>{wins[k]}</span>
+                        </div>
+                      )),
+                      i,
+                    );
+                  })}
+                </div>
+              </div>
+            </Fragment>
+          );
+        })}
       </div>
     </Panel>
   );
@@ -504,12 +548,13 @@ function Age({ f, id }: { f: Franchise; id: number }) {
   );
 }
 /** A sprite in a square box (big ones are cropped). */
-function Face({ p, size = 56 }: { p: RatedPokemon; size?: number }) {
-  return (
-    <span className="flex shrink-0 items-end justify-center overflow-hidden bg-navy" style={{ width: size, height: size }} title={p.name}>
+function Face({ p, size = 56, onOpen }: { p: RatedPokemon; size?: number; onOpen?: (p: RatedPokemon) => void }) {
+  const face = (
+    <span className="flex shrink-0 items-end justify-center overflow-hidden bg-navy" style={{ width: size, height: size }} title={onOpen ? `${p.name}'s stats` : p.name}>
       <Sprite p={p} eager className="max-w-none" />
     </span>
   );
+  return onOpen ? <button className="shrink-0 cursor-pointer" aria-label={`Stats for ${p.name}`} onClick={() => onOpen(p)}>{face}</button> : face;
 }
 /** A player's season numbers are under the name he played it with (before he evolved this summer). */
 const statsOf = (f: Franchise, id: number) => {
@@ -524,6 +569,7 @@ const slotLabel = (s: number) => (s < STARTERS ? SLOTS[s] : "BENCH");
 function RosterCards({ ctx, summer = false }: { ctx: Ctx; summer?: boolean }) {
   const { f, ld, update, openCard } = ctx;
   const [moving, setMoving] = useState<number | null>(null);
+  const [saved, setSaved] = useState("");
   const team = f.teams[YOU];
   const click = (slot: number) => {
     moveBlip();
@@ -569,6 +615,19 @@ function RosterCards({ ctx, summer = false }: { ctx: Ctx; summer?: boolean }) {
         <span className="text-[18px] text-steel">
           {moving == null ? "Click a player, then another spot, to swap them. The five start; the bench comes in when they tire." : "Now click the spot to swap with (or the same card to cancel)."}
         </span>
+        <button
+          className="px-btn !py-0 !text-[18px] disabled:opacity-50"
+          disabled={openSlots(team).length > 0}
+          title={openSlots(team).length ? "Fill every spot first" : "Save this roster as it is now (trades, evolutions, signings) to MY TEAMS, to play or share"}
+          onClick={() => {
+            const out = saveTeam(lineupOf(f, YOU));
+            typeof out === "string" ? backBlip() : selectBlip();
+            setSaved(typeof out === "string" ? out : "SAVED TO MY TEAMS");
+          }}
+        >
+          SAVE TEAM
+        </button>
+        {saved && <span className="text-[18px] text-lime" role="status">{saved}</span>}
         {summer && held && moving != null && (
           <button className="px-btn !py-0 !text-[18px]" onClick={() => (backBlip(), update(release(f, moving)), setMoving(null))} title="He joins the free agents and his deal comes off your payroll">
             RELEASE {ld.get(held.id)?.name}
@@ -743,9 +802,9 @@ function Review({ ctx }: { ctx: Ctx }) {
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {theirs.map((c) => (
               <div key={c.id} className="flex min-w-0 items-center gap-2 border-2 border-slate bg-black p-1">
-                <Face p={dex.get(c.id)!} size={48} />
+                <Face p={dex.get(c.id)!} size={48} onOpen={openCard} />
                 <span className="text-gold"><Arrow /></span>
-                <Face p={dex.get(c.to!)!} size={48} />
+                <Face p={dex.get(c.to!)!} size={48} onOpen={openCard} />
                 <span className="flex min-w-0 flex-col text-[18px] leading-[18px]">
                   <span className="truncate text-white">{dex.get(c.to!)!.name}</span>
                   <span className="truncate text-steel">{f.teams[c.team].name}</span>
@@ -913,6 +972,7 @@ function Draft({ ctx }: { ctx: Ctx }) {
       canPlace={(slot, p) => rookieSalary(p) <= room(f, slot)}
       bestSlot={(p) => bestOpenFit(f, p, rookieSalary(p))}
       onPlace={(id, slot) => update(draftPick(f, dex, id, slot))}
+      onSwap={(a, b) => update(swap(f, a, b))}
       actions={yourTurn && <button className="px-btn !text-[20px]" onClick={() => (moveBlip(), update(draftPick(f, dex, null)))}>PASS THIS PICK</button>}
     >
       <p className="m-0 text-[20px] leading-[22px] text-cloud">
@@ -954,6 +1014,7 @@ function Signing({ ctx }: { ctx: Ctx }) {
       canPlace={(slot, p) => salary(p) <= room(f, slot)}
       bestSlot={(p) => bestOpenFit(f, p, salary(p))}
       onPlace={(id, slot) => update(sign(f, dex, id, slot))}
+      onSwap={(a, b) => update(swap(f, a, b))}
       actions={
         <>
           {open > 0 && <button className="px-btn !text-[20px]" disabled={ticking} onClick={() => (selectBlip(), update(autoSign(f, dex)))}>AUTO-FILL</button>}

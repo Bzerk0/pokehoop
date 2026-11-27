@@ -16,6 +16,7 @@
   generation 7 for region chemistry, the species' evolution line; Totem forms skipped). Share codes hold 16-bit numbers.
 - Palette: `src/ui/theme/palette.ts` is the source; `src/index.css` `@theme` mirrors it (a test checks they match).
 - Ratings: `src/core/ratings.ts` (formulas), `src/core/ratingConfig.ts` (numbers), `src/core/overrides.json` (hand fixes).
+- Live-only type abilities: `src/core/live/abilities.ts` picks one from the first type. Strengths are in `ratingConfig.ts` (`ABILITY`). Flying or Dragon in either slot keeps its double jump, including for CPU blockers.
 - Live game (Phases 5–6: 1v1, 3v3, 5v5): rules in `src/core/live/game.ts` (pure, seeded, tested; tuning in
   `ratingConfig.ts` LIVE/LIVE_AI). One engine for any team size: `g.players` is side 0 then side 1 in lineup order,
   `ball.holder` is a player index, `g.control` is the side-0 player you steer (follows the ball on offence; the
@@ -37,7 +38,8 @@
   The pause menu (ArcadePage) has subs, music, sim the rest; a full game ends on PlayPage's `Results`.
   Phase 9: ON FIRE (`LIVE.fireAfter` straight makes: type-coloured flame aura, `fireWindow` × green zone, free
   sprinting, until the other team scores). HOW TO PLAY (Play page) is a 3v3 practice game (`practice`: no shot clock,
-  no winner) run by `src/game/tutorial.ts` (7 steps, each with a setup, a check and a hint); `tutorial.test.ts`
+  no winner) run by `src/game/tutorial.ts` (8 steps, each with a setup, a check and a hint; CROSSOVER has a man standing in front; STEAL has their
+  handler walk it up slowly, `cpuInput`, with `LIVE.tutorStealAid` on your steals, and only a steal ends it); `tutorial.test.ts`
   scripts a new player through it in under 2 minutes. Events made between game steps (a Q-menu call) are handled
   at once in LiveView (`extraEvents`), since the next step clears `g.events`. Key remapping: `src/game/keys.ts`
   (action → key code, saved in localStorage `s5p-keys-v2`; v1 maps are migrated with sprint moved to L; arrows, Space
@@ -100,14 +102,14 @@
   `LIVE.spriteScale` sizes the court sprites in 1v1, `spriteScaleTeam` (0.8) in team games (dev menu GAME). Posterize: a slam with a defender within
   `posterRange` (live cut or replay) turns him into a trading card (`posterize`/`drawPoster`, POSTER_MS; his sprite
   hides meanwhile; the live cut holds `posterHold` longer). SIM THE REST plays the TipOff playback first. PRE-GAME from
-  a game returns to the same team, difficulty, opponent and character select (ArcadeSetup `back`, PlayPage navState).
+  a game returns to the Play page's first screen (GAME MODE) with the same team and difficulty (ArcadeSetup `back`, PlayPage navState).
   Title lag fix: the attract fast-forward runs at most ATTRACT_BUDGET_MS (4 ms) a frame (a whole search was 40–130 ms).
 - Phone portrait title (`usePortraitTouch`): the whole cabinet (Cabinet3D `whole` framing, PixelStage `exact` fit),
   then it faces you and stays 3D (marquee and control panel above and below the screen), then a full-screen menu
   (four stacked buttons, the clips stretched to cover behind them). Turn-sideways screens have a BACK button; on
   iPhone the pause menu's HIDE ADDRESS BAR brings the scroll-to-start screen back (`useScrollToStart` returns
   [waiting, again]).
-- Batch (tutorial/mobile/defence): DEFEND in HOW TO PLAY restarts if they score (it used to count your inbound as
+- Batch (tutorial/mobile/defence): STEAL (was DEFEND) in HOW TO PLAY restarts if they score or you get it back without a steal (it used to count your inbound as
   a steal and end the lesson). Menu music unlocks on touchend/click too (iOS; `Music.blocked`). Touch screens can't
   select the page (index.css, pointer coarse). HIDE ADDRESS BAR keeps the pause; the scroll-lock is off on the results
   (`useScrollToStart(active)`). Touch buttons read the game (`LiveView.touchState`): SCREEN is STEAL and SHOOT is JUMP
@@ -127,8 +129,8 @@
   mirroring lineupGame's default slots (a test keeps them equal), difficulty, NEW OPPONENT, START, SIM GAME (FIVES) and
   the Pokédex under it for your own picks; your picks come first and the ready-made fill the rest). PlayPage state:
   `selecting` (mode), `chosen` (your players, or "team"), `oppPicks`. The opponent you chose goes to the game as
-  `awayPicks` (lineupGame's new last parameter) with its eight reordered; PRE-GAME from a game comes back to the
-  opponent select (ArcadeSetup `back`: `chosen`, `oppPicks`). Esc steps back one step.
+  `awayPicks` (lineupGame's new last parameter) with its eight reordered; PRE-GAME from a game comes back to GAME MODE
+  (the user's call; `back` still carries `chosen`/`oppPicks`, unused there). Esc steps back one step.
 - Latest tweaks: the Play page's difficulty buttons and NEW OPPONENT live in the opponent's column (above the CPU lineup
   on desktop, below it on a phone: flex `order`). The score card after a live game plays the menu song (ArcadePage
   `useMusic(final?.result ? "menu" : null)`); box scores leave off players who never played or did anything (`played`
@@ -143,7 +145,7 @@
 - Screens: any player planting with `Input.screen` stops; the CPU sets screens outside plays too (`aiScreenRate`,
   `aiScreenHold`: the teammate nearest the handler plants beside him toward the hoop, then rolls) and handlers drive off
   them. Floater: a quick tap while driving (`driveSpeed`) between `layupRange` and `floaterRange` (high soft arc,
-  Finishing + Shooting, contests count half). Eurostep: the crossover while driving inside `eurostepRange` (two plants
+  Finishing + Shooting, contests count half). Eurostep: the crossover while driving inside `eurostepRange`, moving faster than `driveSpeed` with the stick off the line to the rim (`euroAcross`, judged against the rim, not your velocity: the stick turns you before the second tap; the CPU turns its stick for it). Back-down: the crossover near the rim (`backRange`), barely moving (`backStill`) or pressed within `backContact` with the stick into him, a man in front within `backReach` = POWER DRIBBLE (`backDown`, `pl.post`/`postOn`), won or lost at the start by `backDownChance` (`postPower`: strength, size by weight, finishing vs interior D); one quick shove (`backShove` s at `backPush` m/s; a win keeps carrying him at `backCarry` for the rest of `backTime`, a loss budges him `backLoss` × as far and plants you; a "post" event, no caption: LiveView flashes a see-through white oval between them (`wall`, BARRIER_MS; screens get it too); shoot during or within `backDunk` s after a win dunks inside `dunkRange` without turbo (`pl.postDunk`); a ball handler walking into a defender takes `bumpHold` of the bump (bumpApart), so backing down is how to gain ground, nudges the camera and thuds) and a win carries both toward the rim (BACKED DOWN!), a loss is WALLED OFF! (`backStall`); the CPU backs down too (ai.ts `backDown`: only when it wins at least `backAiMin` of the time, at `backAi`/s when set up, `backAiPost`/s in a POST UP, whose key player plants once on his man; ~2 a 5v5 game); a DISH! out of a eurostep ends its live cut at once. Eurostep detail: (two plants
   over `euroTime`, `pl.euro`; a defender in front held `euroSlow`; it finishes itself with a layup, or a floater
   if still past `layupRange`; in team games a contested one may be a DISH! to the open man instead, `euroPass`).
   Big shouts over cinematics: LiveView `shout` (cineCaption) on each live cut and at each replay key moment (SLAM!,
@@ -179,8 +181,7 @@
   violation; clear blue rings under your teammates, yellow under whoever J would pass to (the CPU's players get only a shadow); a "P1" ▼ over you.
   A crossover pushing away from the hoop is a step-back (`stepBackBoost`).
 - Long shots: past `longFrom` (× court size) the make chance × `longShotFactor` (exponential falloff over a distance
-  set by 0.6 Shooting + 0.4 Strength to the power `longPower`). Special abilities (prototype): Flying/Dragon types
-  double jump (`canDoubleJump`, `LIVE.doubleJump`; the stick redirects it, `doubleSteer`; the CPU doesn't use it yet). Game over: a beat (ENDING in
+  set by 0.6 Shooting + 0.4 Strength to the power `longPower`). The stick redirects a double jump (`LIVE.doubleSteer`). Game over: a beat (ENDING in
   LiveView), then losers tip over, winners hop, womp womp / fanfare (sound.ts), then the menu. The near hoop has no
   shot clock (the far one and the scoreboard do).
 - Dev menu (` in a live game, or DEV in the pause menu): `src/game/dev.ts` + `src/ui/components/DevPanel.tsx` edit
@@ -189,6 +190,27 @@
   can change too (on the next game). New LIVE numbers show up automatically; add a note in DEV_GROUPS if useful.
 - Court size: `LIVE.courtScale` (1.15 = the user's "15% bigger" test; 1 = a real court) scales `COURT` (size, lines,
   three-point arc), the spots, zones, play spots and play timings; players, rim height and pass/shot physics don't.
+- Playtest batch (v2): drafts can swap roster spots (click a filled card, then another card or open spot: `swapSpots` in
+  draft.ts, `swapYours` in fullDraft.ts, DraftRoom's `onSwap`). Moves guide: `src/game/moveGuide.ts` is the one list (pixel
+  icons, keys, short and long text, most important first) used by the intro card (LiveView `drawIntro`) and the pause
+  menu's CONTROLS (`MoveGuide.tsx`); both have PLAY TUTORIAL (ArcadePage `playTutorial`, intro button shown while
+  `LiveView.onIntro`); a tutorial started from a game keeps it in `ArcadeSetup.returnTo`, and LESSON DONE offers RETURN TO
+  GAME (a fresh tip-off of that game) instead of PLAY 5V5. The defence switch (pass key) runs at the top of a player's step in game.ts, so it works whatever
+  you face or are doing; LiveView keeps a tap for the next step if a frame had none (`heldTap`). `LIVE.blockAssist` /
+  `blockAssistRange`: the defender you steer blocks more easily (never the CPU's). Star prices: SALARY_MAX 34 (was 40) and
+  DRAFT_GRADES moved up 2.3; re-check with `npx tsx scripts/draft-calibrate.ts`. RANDOMIZE button on the ACCENT
+  ColorPick (`randomTeamStyle` in cpuTeam.ts). YOUR BEST DRAFTS board: `recordBest` in storage.ts (localStorage, top 10).
+  WHAT'S NEW: `src/ui/whatsNew.ts` (bump `WHATS_NEW_VERSION` and add notes each release), page `/whats-new`, reached
+  from ABOUT; the title's ABOUT button and About's WHAT'S NEW button carry a NEW tag until it's read.
+- Playtest batch 2: a new player's title-screen five ride along in `ArcadeSetup.back.starters` (coming back from a game
+  without them found no team); with no team, BACK/Esc on the Play page go straight home. Character select: with every
+  spot taken, a new pick replaces the oldest one in its spot (`recent` in CharacterSelect). Auto subs start off in live
+  games except franchise games (ArcadePage `setAutoSub`). Champion is open to Classic teams and the opponent's
+  difficulty starts at `suggestedDifficulty(teamOvr)` (cpuTeam.ts; marked * on the buttons). The pause menu is grouped:
+  RESUME, THIS GAME (subs, sim the rest), SETTINGS (music, controls, dev, hide bars), LEAVE (restart, pre-game).
+- Move counters (test): `LIVE.softBlock` (quick shots and floaters, `Flight.soft`, are easier to block), `euroGuard` /
+  `euroStrip` (a defender still close at a eurostep's finish can strip it), `oopSwat` (a defender in the air at the lob can
+  swat it) and a higher bar for alley-oops (`oopFinishing` 70 for the receiver, `oopPassing` 55 for the passer).
 - Editing on Windows: change files with the Edit/Write tools, not PowerShell Get-Content/Set-Content (PowerShell 5.1
   reads UTF-8 as ANSI and mangles é, …, ◀ and the like).
   `npm run balance:live [size] [level] [games] [scheme]` plays full CPU-vs-CPU games (with coaches) and reports
@@ -221,7 +243,8 @@
   meter, colour pickers, share link, PNG) live in `src/ui/components/TeamControls.tsx`.
 - The draft (DraftPage) has two kinds. ARCADE DRAFT = `src/core/draft.ts`: a slot machine, each round a pull of
   `ARCADE.reels` reels, each landing on a tier drawn by `ARCADE.weights`, plus a STAR top-up (`starChance`; `firstStar`
-  on the first pull); pick then place on any open spot, re-spins, grades. The page animates the pull (reels stop one
+  on the first pull; `overChance`: a pull may swap a non-STAR reel for a locked STAR over your budget, `Offer.pricey`, shown
+  but never takeable); pick then place on any open spot, re-spins, grades. The page animates the pull (reels stop one
   by one, handle, STAR flash) and has a draft dev menu (` : `draftDev` in `src/game/dev.ts`, which now makes dev menus
   for any settings object with `makeDev`). FULL DRAFT = `src/core/fullDraft.ts` + `FullDraftView.tsx`: a bell-curve
   class (`FULL`), a lottery pick order, CPU teams picking the best they can afford; its result becomes a finished
@@ -229,9 +252,20 @@
   (`salary`) are the rating's price ± `ARCADE.price.vary` per Pokémon (a hash of its number and `price.seed`;
   `price.perDraft` = 1 makes a new seed each draft), all in the draft dev menu's PRICES. Tiers, rerolls and grade cut-offs are in `ratingConfig.ts`; the grades were calibrated by simulating
   600 drafts per strategy, so re-simulate if you change the cap, salaries, tiers or chemistry.
+  The draft's verdict is a season record, not the rating: `src/core/season.ts` (`seasonRecord`) plays the finished
+  team 82 sim games against a fixed league (`SEASON` in ratingConfig: teams per difficulty, built once from its seed,
+  so every draft meets the same league; game seeds come from the picks, so a team always gets the same record) and
+  grades the wins (`SEASON.grades`, `seasonGrade`). DraftPage shows W-L on the results, the Last Draft box, the daily
+  share text and the best-drafts board (`BestDraft.wins`, sorted by wins; older rows have none). Calibrate with
+  `npx tsx scripts/draft-calibrate.ts 120 wins`. The sim takes a starter's OVR drop out of position off every
+  rating (`SIM.fitWeight`; `slope` went 120 → 132 to keep the favourite band), so fit counts; stars still count for
+  more in wins than in the averaged rating.
 - Chemistry: `src/core/chemistry.ts` (links: evolution line via `chain` in the data, starter trio, same type (trio, ×4–×7, all 8: `CHEM.typeTrio`/`typeMore`), rival
   pairs, famous squads, whole-team region/type). Boost sizes in `ratingConfig.ts` (CHEM, CHEM_MAX); the pair and
   squad lists are data in chemistry.ts (a test checks every slug exists). Team OVR and draft grades include it.
+  Live team games (3v3/5v5, not 1v1 or practice) play it too: `lineupGame` adds `LIVE.chemAttr` × a player's boost to
+  every attribute (both teams) and keeps the links in `g.chem`; at tip-off LiveView slams in CHEMISTRY/CHEMISTRIES
+  and your links one by one in slow-mo (`LIVE.chemSlow/chemLead/chemGap/chemHold/chemShow`). The sim ignores it.
 - Games: `src/core/cpuTeam.ts` (CPU teams by difficulty band, ignore the cap), `src/core/sim/sim.ts` (possession
   sim, `simRest` finishes a game from any state), `src/core/stats.ts` (box score shape shared with the live game).
   All tuning in `ratingConfig.ts` (DIFFICULTIES, SIM). `npm run balance` sims 10,000 games; keep a 15-OVR favourite
@@ -295,4 +329,9 @@
   Layout (the user's tuning): stick 107 px from the left and 36 px up; the button cluster 59 px from the right and 36 px
   up, with PASS/TURBO 64 px and SHOOT 84 px (its columns are equal width, so the cluster's right offset sets SCREEN's spot);
   pause stays top-right; the phone game's footer "i" sits at 36 px / 16 px.
+- Menus work with mouse and arrows: `src/ui/arrowNav.ts` (installed in App) moves focus to the nearest button in
+  the arrow's direction on any page, or inside the top `role="dialog"` pop-up; it skips keys another listener
+  preventDefault-ed (the title menu), text boxes, and `[data-arrow-nav="off"]` (ArcadePage, where arrows steer) unless
+  a pop-up is open. Focused `.px-btn`s light gold like hovered ones. The Q plays menu on the game canvas takes hover and
+  click (LiveView `mouse`, `menuRow`, `MENU_BOX`). New menus: plain buttons (and `role="dialog"` for pop-ups) get it free.
 - Whole-number scaling counts real screen pixels (`PixelStage`: devicePixelRatio), so on a 1.5× display the art is 2× or 3×, never 1.5×.

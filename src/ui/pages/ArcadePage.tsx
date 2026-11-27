@@ -6,6 +6,8 @@ import { LIVE_AI } from "../../core/ratingConfig.ts";
 import type { GameResult } from "../../core/sim/sim.ts";
 import { score } from "../../core/stats.ts";
 import { ACTION_NAME, ACTIONS, DEFAULT_KEYS, keyName, loadKeys, rebind, saveKeys, type Action } from "../../game/keys.ts";
+import { guide } from "../../game/moveGuide.ts";
+import { MoveList } from "../components/MoveGuide.tsx";
 import type { LiveView } from "../../game/LiveView.ts";
 import { HomeLogo } from "../components/HomeLogo.tsx";
 import { PixelStage, STAGE_H } from "../components/PixelStage.tsx";
@@ -21,7 +23,7 @@ import { TouchControls } from "../components/TouchControls.tsx";
 import { isIphoneBrowser, isTouch, useScrollToStart } from "../touch.ts";
 import { TipOff } from "../components/TipOff.tsx";
 import { reducedMotion } from "../components/Cabinet3D.tsx";
-import { checkFranchise, finishSlate, leagueDex, recordYours, yourGame, type Career } from "../../core/franchise.ts";
+import { checkFranchise, finishDay, leagueDex, recordYours, yourGame, type Career } from "../../core/franchise.ts";
 import { loadFranchise, saveFranchise } from "../../storage.ts";
 
 applyDevSettings(); // the dev menu's saved tuning, before any game starts
@@ -43,6 +45,7 @@ export type ArcadeSetup = {
   cpuColor: PaletteName;
   level: Difficulty;
   tutorial?: boolean; // HOW TO PLAY: a practice 3v3, step by step
+  returnTo?: ArcadeSetup; // a tutorial opened from a game (PLAY TUTORIAL): LESSON DONE goes back to that game
   /** A franchise game (FranchisePage): its key on the league's slate, the season, and the two rosters' development
    *  (their ratings as the league has them). The result is recorded when the game ends. */
   franchise?: { key: string; season: number; career: Record<string, Career> };
@@ -50,6 +53,7 @@ export type ArcadeSetup = {
   back?: {
     team: string; select: 1 | 3 | 5 | "solo" | "half" | null; difficulty: Difficulty; oppSeed: number;
     chosen?: number[] | "team"; oppPicks?: number[]; // the players you took and the opponent you picked: straight back to the opponent select
+    starters?: number[]; // a new player's title-screen five (their team when they have none saved)
   };
 };
 
@@ -96,6 +100,12 @@ export function ArcadePage() {
   const [listening, setListening] = useState<Action | null>(null); // waiting for the new key for this action
   const [pickOut, setPickOut] = useState<number | null>(null); // the court player chosen to come off
   const [, refresh] = useState(0); // re-read the roster after a sub
+  const [intro, setIntro] = useState(false); // the intro card (keys, TIP OFF) is up
+  useEffect(() => {
+    const t = setInterval(() => setIntro(!!game.current?.onIntro), 200);
+    return () => clearInterval(t);
+  }, [round]);
+  const moves = guide(keys, (setup?.size ?? 5) > 1, isTouch());
   const [simming, setSimming] = useState<GameResult | null>(null); // "sim the rest": the tip-off playback is on
 
   // a franchise game's result goes into the league as soon as it's final (and the rest of the week is simmed)
@@ -104,7 +114,7 @@ export function ArcadePage() {
     recorded.current = true;
     const pool = dexOf(data), f = checkFranchise(loadFranchise(), pool);
     if (!f || f.season !== setup.franchise.season || yourGame(f)?.key !== setup.franchise.key) return;
-    saveFranchise(finishSlate(recordYours(f, setup.franchise.key, final.result.teams), pool));
+    saveFranchise(finishDay(recordYours(f, setup.franchise.key, final.result.teams), pool));
   }, [final, setup, data]);
 
   useEffect(() => {
@@ -122,6 +132,7 @@ export function ArcadePage() {
         level: LIVE_AI[setup.tutorial ? "ROOKIE" : setup.level], seed: Date.now() >>> 0, tutorial: setup.tutorial,
         onOver: (s, result) => setFinal({ score: s, result }),
       });
+      game.current.setAutoSub(!!setup.franchise); // your subs are yours to make (pause → SUBS), except in a franchise game
     })();
     return () => {
       dead = true;
@@ -197,7 +208,8 @@ export function ArcadePage() {
   const toPreGame = () => {
     backBlip();
     if (setup.franchise) return navigate("/franchise"); // (a game left part-way is still to play there)
-    navigate("/play", { state: setup?.back }); // back to the same team, opponent and character select
+    const b = setup?.back; // back to the Play page's first screen (GAME MODE), with the same team and difficulty
+    navigate("/play", { state: b && { team: b.team, starters: b.starters, difficulty: b.difficulty } });
   };
   /** After the lesson: straight into a real 5v5 with the same teams. */
   const playForReal = () => {
@@ -205,6 +217,26 @@ export function ArcadePage() {
     setFinal(null);
     setPaused(false);
     navigate("/play/live", { state: { ...setup, size: 5, picks: undefined, solo: false, tutorial: false } satisfies ArcadeSetup, replace: true });
+  };
+  const group = "m-0 mt-1 w-full border-b-2 border-slate text-left font-head text-[8px] leading-[14px] text-steel"; // pause menu headings
+  const item = "px-btn !px-1 !py-0 !text-[20px]";
+  const half = `${item} w-[calc(50%-2px)]`; // two to a row
+  const row = "flex w-full flex-wrap justify-center gap-1"; // a lone half sits centred
+  /** HOW TO PLAY from the controls: a practice 3v3 with the same teams (a franchise game stays unplayed). */
+  const playTutorial = () => {
+    if (!setup) return;
+    selectBlip();
+    setPaused(false);
+    const returnTo = setup.tutorial ? setup.returnTo : setup; // (from a tutorial: still back to the game it came from)
+    navigate("/play/live", { state: { ...setup, size: 3, picks: undefined, awayPicks: undefined, solo: false, half: false, franchise: undefined, tutorial: true, returnTo } satisfies ArcadeSetup, replace: true });
+  };
+  /** LESSON DONE, when the tutorial came from a game: back to that game (it starts again from the tip-off). */
+  const returnToGame = () => {
+    if (!setup?.returnTo) return;
+    selectBlip();
+    setFinal(null);
+    setPaused(false);
+    navigate("/play/live", { state: setup.returnTo, replace: true });
   };
   const simRest = () => {
     const g = game.current;
@@ -255,7 +287,7 @@ export function ArcadePage() {
   const won = final && final.score[0] > final.score[1];
 
   return (
-    <div className="h-full min-h-[360px]" style={touch ? { touchAction: scrollFirst ? "pan-y" : "none" } : undefined /* no scrolling or zooming the game on a phone */}>
+    <div className="h-full min-h-[360px]" data-arrow-nav="off" /* arrows steer the game; pop-ups (role dialog) still get them */ style={touch ? { touchAction: scrollFirst ? "pan-y" : "none" } : undefined /* no scrolling or zooming the game on a phone */}>
       {touch && dex && !paused && !final && !scrollFirst && <TouchControls team={setup.size > 1} state={() => game.current?.touchState} onBack={toPreGame} />}
       {scrollFirst && (
         <div className="pointer-events-none fixed inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-black/70 px-16 text-center [@media(orientation:portrait)]:bg-black">
@@ -337,13 +369,25 @@ export function ArcadePage() {
               </div>
             )}
 
+            {intro && !paused && !final && !setup.tutorial && (
+              <button className="px-btn absolute bottom-[40px] right-[44px] !text-[16px]" onClick={playTutorial}>PLAY TUTORIAL <Arrow /></button>
+            )}
             {/* CONTROLS: click an action, press its new key */}
             {paused && view === "dev" && <DevPanel onClose={() => (setView("menu"), setPaused(false))} />}
 
             {paused && view === "controls" && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/70" role="dialog" aria-label="Controls">
-                <div className="px-box flex w-[420px] flex-col gap-1 p-3">
+                <div className="px-box flex max-h-[340px] w-[600px] flex-col gap-1 overflow-y-auto p-3">
                   <p className="m-0 text-center font-head text-[12px] text-gold">CONTROLS</p>
+                  <button className="px-btn mb-1 w-full !text-[18px]" onClick={playTutorial}>PLAY TUTORIAL <Arrow /></button>
+                  <div className="grid grid-cols-2 gap-x-3">
+                    <MoveList title="OFFENCE (BEST FIRST)" moves={moves.offence} />
+                    <div className="flex flex-col gap-2">
+                      <MoveList title="DEFENCE" moves={moves.defence} />
+                      <MoveList title="GAME" moves={moves.game} />
+                    </div>
+                  </div>
+                  <p className="m-0 mt-1 border-b-2 border-slate font-head text-[10px] leading-[16px] text-gold">CHANGE A KEY</p>
                   <p className="m-0 text-center text-[18px] leading-[18px] text-cloud">
                     {listening ? `PRESS A KEY FOR ${ACTION_NAME[listening]} (ESC: CANCEL)` : "CLICK ONE, THEN PRESS ITS NEW KEY"}
                   </p>
@@ -371,12 +415,16 @@ export function ArcadePage() {
 
             {((paused && view === "menu") || final) && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/70" role="dialog" aria-label={final ? "Game over" : "Paused"}>
-                <div className="px-box flex w-[300px] flex-col items-center gap-1 p-3 text-center">
+                <div className="px-box flex w-[340px] flex-col items-center gap-1 p-3 text-center">
                   {final && setup.tutorial ? (
                     <>
                       <p className="m-0 font-head text-[16px] flash-win">LESSON DONE!</p>
                       <p className="m-0 text-[20px] text-cloud">You know the moves. Time for a real game.</p>
-                      <button className="px-btn w-full !py-0 !text-[20px]" autoFocus onClick={playForReal}>PLAY 5V5 <Arrow /></button>
+                      {setup.returnTo ? (
+                        <button className="px-btn w-full !py-0 !text-[20px]" autoFocus onClick={returnToGame}>RETURN TO GAME <Arrow /></button>
+                      ) : (
+                        <button className="px-btn w-full !py-0 !text-[20px]" autoFocus onClick={playForReal}>PLAY 5V5 <Arrow /></button>
+                      )}
                     </>
                   ) : final ? (
                     <>
@@ -386,28 +434,38 @@ export function ArcadePage() {
                   ) : (
                     <p className="m-0 font-head text-[16px] text-gold">PAUSED</p>
                   )}
-                  {!final && <button className="px-btn w-full !py-0 !text-[20px]" autoFocus onClick={() => (moveBlip(), setPaused(false))}>RESUME</button>}
-                  {!final && live?.roster().timed && (
-                    <button className="px-btn w-full !py-0 !text-[20px]" onClick={() => (moveBlip(), setView("subs"))}>SUBS</button>
-                  )}
-                  {!final && live && (
-                    <button className="px-btn w-full !py-0 !text-[20px]" onClick={() => (live.toggleMusic(), moveBlip(), refresh((n) => n + 1))}>
-                      MUSIC: {live.musicOn ? "ON" : "OFF"}
-                    </button>
-                  )}
                   {!final && (
-                    <span className="flex w-full gap-1">
-                      <button className="px-btn flex-1 !py-0 !text-[20px]" onClick={() => (moveBlip(), setView("controls"))}>CONTROLS</button>
-                      <button className="px-btn flex-1 !py-0 !text-[20px]" onClick={() => (moveBlip(), setView("dev"))}>DEV (`)</button>
+                    <span className="flex w-full flex-col gap-1">
+                      <button className={`${item} w-full`} autoFocus onClick={() => (moveBlip(), setPaused(false))}>RESUME</button>
+                      {live?.roster().timed && <button className={`${item} w-full`} onClick={() => (moveBlip(), setView("subs"))}>SUBS</button>}
                     </span>
                   )}
-                  {/* iPhone: the scroll-to-start screen again, for when Safari's bars come back */}
-                  {!final && isIphoneBrowser() && <button className="px-btn w-full !py-0 !text-[20px]" onClick={() => (moveBlip(), scrollAgain())}>HIDE ADDRESS BAR</button>}
-                  {!final && live?.canSimRest && <button className="px-btn w-full !py-0 !text-[20px]" onClick={simRest}>SIM THE REST <Arrow /></button>}
-                  <button className="px-btn w-full !py-0 !text-[20px]" autoFocus={!!final && !setup.tutorial} onClick={restart}>
-                    {setup.tutorial ? "START OVER" : final ? "REMATCH" : "RESTART"}
-                  </button>
-                  <button className="px-btn w-full !py-0 !text-[20px]" onClick={toPreGame}><Arrow left /> {setup.franchise ? "THE LEAGUE" : "PRE-GAME"}</button>
+                  {/* grouped: this game, settings, then the ways out (an odd one out sits centred) */}
+                  {!final && live?.canSimRest && (
+                    <>
+                      <p className={group}>THIS GAME</p>
+                      <span className={row}><button className={half} onClick={simRest}>SIM THE REST</button></span>
+                    </>
+                  )}
+                  {!final && (
+                    <>
+                      <p className={group}>SETTINGS</p>
+                      <span className={row}>
+                        {live && <button className={half} onClick={() => (live.toggleMusic(), moveBlip(), refresh((n) => n + 1))}>MUSIC: {live.musicOn ? "ON" : "OFF"}</button>}
+                        <button className={half} onClick={() => (moveBlip(), setView("controls"))}>CONTROLS</button>
+                        <button className={half} onClick={() => (moveBlip(), setView("dev"))}>DEV (`)</button>
+                        {/* iPhone: the scroll-to-start screen again, for when Safari's bars come back */}
+                        {isIphoneBrowser() && <button className={half} onClick={() => (moveBlip(), scrollAgain())}>HIDE BARS</button>}
+                      </span>
+                      <p className={group}>LEAVE</p>
+                    </>
+                  )}
+                  <span className={row}>
+                    <button className={half} autoFocus={!!final && !setup.tutorial} onClick={restart}>
+                      {setup.tutorial ? "START OVER" : final ? "REMATCH" : "RESTART"}
+                    </button>
+                    <button className={half} onClick={toPreGame}><Arrow left /> {setup.franchise ? "LEAGUE" : "PRE-GAME"}</button>
+                  </span>
                 </div>
               </div>
             )}

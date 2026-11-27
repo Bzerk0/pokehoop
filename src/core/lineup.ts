@@ -31,7 +31,11 @@ export type Lineup = {
   colors: [number, number];
   /** a dex number per slot (SLOTS order), or null when empty */
   ids: (number | null)[];
+  /** Free Build's UNLIMITED MONEY: no salary cap (kept in share codes) */
+  noCap?: boolean;
 };
+/** The team's salary cap: SALARY_CAP, or no limit with UNLIMITED MONEY. */
+export const capOf = (l: Pick<Lineup, "noCap">) => (l.noCap ? Infinity : SALARY_CAP);
 
 export const emptyLineup = (mode: Mode = "classic"): Lineup => ({
   name: "MY STARTING 5",
@@ -69,7 +73,7 @@ export function budgetFor(l: Lineup, slot: number, dex: Dex): number {
   const current = l.ids[slot];
   const others = payroll(l, dex) - (current != null && dex.has(current) ? salary(dex.get(current)!) : 0);
   const otherEmpties = l.ids.filter((id, i) => id == null && i !== slot).length;
-  return SALARY_CAP - others - otherEmpties * SALARY_MIN;
+  return capOf(l) - others - otherEmpties * SALARY_MIN;
 }
 export const dexOf = (pool: RatedPokemon[]): Dex => new Map(pool.map((p) => [p.id, p]));
 
@@ -101,7 +105,7 @@ export function teamRating(l: Lineup, dex: Dex): number | null {
 
 /** Rule breaks: the same Pokémon twice, unknown dex numbers, a legendary/mythical in Classic, or over the cap. */
 export function problems(l: Lineup, dex: Dex): string[] {
-  const over = payroll(l, dex) - SALARY_CAP;
+  const over = payroll(l, dex) - capOf(l);
   const out = problemsBesidesCap(l, dex);
   if (over > 0) out.push(`Over the salary cap by $${over}M`);
   return out;
@@ -141,7 +145,7 @@ export function autoFill(l: Lineup, pool: RatedPokemon[]): Lineup {
   l.ids.forEach((id, slot) => {
     if (id != null) return;
     const empties = team.ids.filter((x) => x == null).length;
-    const left = SALARY_CAP - payroll(team, dex);
+    const left = capOf(team) - payroll(team, dex);
     const allowance = Math.min(budgetFor(team, slot, dex), Math.ceil((2 * left) / empties));
     let best: RatedPokemon | null = null;
     for (const p of pool) {
@@ -174,14 +178,14 @@ export const withMode = (l: Lineup, mode: Mode, dex: Dex): Lineup => ({
   ids: l.ids.map((id) => (id != null && dex.has(id) && isEligible(dex.get(id)!, mode) ? id : null)),
 });
 
-// Share codes: version, mode, two colours, eight 2-byte dex numbers (0 = empty), then the name in UTF-8,
+// Share codes: version, flags (bit 0: Unlimited pool, bit 1: no cap), two colours, eight 2-byte dex numbers (0 = empty), then the name in UTF-8,
 // as URL-safe base64 with no padding.
 const VERSION = 1;
 
 export function encodeLineup(l: Lineup): string {
   const name = new TextEncoder().encode(l.name.slice(0, NAME_MAX));
   const bytes = new Uint8Array(4 + SLOTS.length * 2 + name.length);
-  bytes.set([VERSION, l.mode === "unlimited" ? 1 : 0, l.colors[0], l.colors[1]]);
+  bytes.set([VERSION, (l.mode === "unlimited" ? 1 : 0) | (l.noCap ? 2 : 0), l.colors[0], l.colors[1]]);
   l.ids.forEach((id, i) => {
     bytes[4 + i * 2] = (id ?? 0) >> 8;
     bytes[5 + i * 2] = (id ?? 0) & 0xff;
@@ -196,11 +200,12 @@ export function decodeLineup(code: string, colorCount: number): Lineup | null {
     const bin = atob(code.replace(/-/g, "+").replace(/_/g, "/"));
     const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
     const head = 4 + SLOTS.length * 2;
-    if (bytes.length < head || bytes[0] !== VERSION || bytes[1] > 1) return null;
+    if (bytes.length < head || bytes[0] !== VERSION || bytes[1] > 3) return null;
     if (bytes[2] >= colorCount || bytes[3] >= colorCount) return null;
     const ids = SLOTS.map((_, i) => (bytes[4 + i * 2] << 8) | bytes[5 + i * 2]).map((id) => id || null);
     const name = new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(head)).slice(0, NAME_MAX);
-    return { name, mode: bytes[1] ? "unlimited" : "classic", colors: [bytes[2], bytes[3]], ids };
+    const l: Lineup = { name, mode: bytes[1] & 1 ? "unlimited" : "classic", colors: [bytes[2], bytes[3]], ids };
+    return bytes[1] & 2 ? { ...l, noCap: true } : l;
   } catch {
     return null;
   }

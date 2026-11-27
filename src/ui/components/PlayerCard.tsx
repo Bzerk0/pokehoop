@@ -1,3 +1,4 @@
+import { abilityOf } from "../../core/live/abilities.ts";
 import { POSITIONS, type Attribute, type Position, type RatedPokemon } from "../../core/types.ts";
 import { PALETTE, typeColor, typeInk } from "../theme/palette.ts";
 
@@ -89,6 +90,7 @@ export function MiniCard({ p, pos, onOpen, tag }: { p: RatedPokemon; pos?: Posit
 /** The full card: type-coloured pixel frame, sprite, big OVR, every position OVR, segmented attribute bars. */
 export function PlayerCard({ p }: { p: RatedPokemon }) {
   const frame = typeColor(p.types[0]);
+  const ability = abilityOf(p);
   return (
     <div className="w-[300px] border-[6px] bg-night p-3" style={{ borderColor: frame, boxShadow: `4px 4px 0 ${PALETTE.black}` }}>
       <div className="flex items-start justify-between">
@@ -107,6 +109,15 @@ export function PlayerCard({ p }: { p: RatedPokemon }) {
 
       <div className="my-2 flex h-[200px] items-end justify-center bg-navy pb-2" style={{ borderBottom: `4px solid ${PALETTE.wood}` }}>
         <Sprite p={p} scale={2} />
+      </div>
+
+      <div className="mb-2">
+        {/* the type chip says where the ability comes from (always the first type) */}
+        <div className="flex items-center gap-2">
+          <TypeChip type={p.types[0]} />
+          <span className="whitespace-nowrap font-head text-[10px] leading-[16px] text-gold">ABILITY: {ability.name}</span>
+        </div>
+        <div className="text-[18px] leading-[18px] text-cloud">{ability.text}</div>
       </div>
 
       <div className="mb-2 grid grid-cols-5 gap-1 text-center">

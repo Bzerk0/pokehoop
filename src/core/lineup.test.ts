@@ -101,6 +101,15 @@ describe("salary cap", () => {
     expect(payroll(stars, dex)).toBeGreaterThan(SALARY_CAP);
     expect(problems(stars, dex).at(-1)).toMatch(/^Over the salary cap by \$\d+M$/);
   });
+  it("UNLIMITED MONEY: a team of stars is fine, any budget, and the share code keeps it", () => {
+    const stars = { ...team(["groudon", "kyogre", "rayquaza", "dialga", "palkia"]), noCap: true };
+    expect(problems(stars, dex)).toEqual([]);
+    expect(budgetFor(stars, 6, dex)).toBe(Infinity);
+    const back = decodeLineup(encodeLineup(stars), 32)!;
+    expect(back.noCap).toBe(true);
+    expect(back.mode).toBe("unlimited");
+    expect(decodeLineup(encodeLineup(team(["groudon"], "classic")), 32)!.noCap).toBeUndefined(); // old codes unchanged
+  });
   it("budgetFor keeps the minimum salary for every other empty slot, and frees the current player's salary", () => {
     const l = team(["groudon"]);
     expect(budgetFor(l, 1, dex)).toBe(SALARY_CAP - salary(dex.get(id("groudon"))!) - 6 * SALARY_MIN);

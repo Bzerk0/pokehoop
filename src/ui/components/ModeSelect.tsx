@@ -1,4 +1,5 @@
 import { FRANCHISE } from "../../core/ratingConfig.ts";
+import { loadFranchise } from "../../storage.ts";
 import { selectBlip } from "../sound.ts";
 import { inkOn, PALETTE, type PaletteName } from "../theme/palette.ts";
 import { Arrow } from "./Arrow.tsx";
@@ -44,7 +45,7 @@ function CourtMini({ n, half, solo }: { n: number; half?: boolean; solo?: boolea
 }
 
 /** The first step of a game: just the game modes, as big arcade cards. */
-export function ModeSelect({ playable, onPick, onTutorial, onFranchise }: { playable: boolean; onPick: (m: ModeKey) => void; onTutorial: () => void; onFranchise: () => void }) {
+export function ModeSelect({ playable, onPick, onTutorial, onFranchise, onNewFranchise }: { playable: boolean; onPick: (m: ModeKey) => void; onTutorial: () => void; onNewFranchise?: () => void; onFranchise: () => void }) {
   const card = (m: ModeDef, big: boolean) => {
     const ink = PALETTE[inkOn(m.color)];
     return (
@@ -93,6 +94,9 @@ export function ModeSelect({ playable, onPick, onTutorial, onFranchise }: { play
           START <span className="group-hover:blink"><Arrow /></span>
         </span>
       </button>
+      {onNewFranchise && loadFranchise() != null && (
+        <button className="px-btn self-end !py-0 !text-[18px]" onClick={() => (selectBlip(), onNewFranchise())}>START A NEW FRANCHISE</button>
+      )}
       <div>
         <p className="m-0 mb-2 text-center font-head text-[10px] text-steel">SPECIAL MODES (TEST)</p>
         <div className="mx-auto grid max-w-[760px] gap-4 sm:grid-cols-2">{SPECIAL.map((m) => card(m, false))}</div>

@@ -8,7 +8,7 @@ import { Sprite } from "./PlayerCard.tsx";
 export function SpinReel({ faces }: { faces: RatedPokemon[] }) {
   return (
     <div className="flex h-[284px] justify-center overflow-hidden border-4 border-slate bg-navy">
-      <div className="slot-spin flex flex-col items-center">
+      <div className="slot-spin flex h-max shrink-0 flex-col items-center self-start">
         {[...faces, ...faces].map((p, k) => (
           <span key={k} className="flex h-[110px] shrink-0 items-center">
             <Sprite p={p} scale={2} eager className="max-w-none" />

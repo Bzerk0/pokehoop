@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isEligible, SLOTS, slotOvr, slotPosition, STARTERS, type Lineup } from "../../core/lineup.ts";
 import type { RatedPokemon } from "../../core/types.ts";
 import { backBlip, moveBlip, selectBlip } from "../sound.ts";
@@ -44,9 +44,16 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
     return () => window.removeEventListener("keydown", onKey, true);
   }, [full, picks, onBack, onStart, stats, random]);
 
+  // the order you picked them in (oldest first): with every spot taken, a new pick replaces the oldest, in its spot
+  const recent = useRef<number[]>([]);
   const toggle = (id: number) => {
     moveBlip();
-    setPicks((ps) => (ps.includes(id) ? ps.filter((x) => x !== id) : size === 1 ? [id] : ps.length < size ? [...ps, id] : ps));
+    const ps = picks, order = recent.current.filter((x) => ps.includes(x));
+    if (ps.includes(id)) return void ((recent.current = order.filter((x) => x !== id)), setPicks(ps.filter((x) => x !== id)));
+    if (ps.length < size) return void ((recent.current = [...order, id]), setPicks([...ps, id]));
+    const oldest = order[0] ?? ps[0];
+    recent.current = [...order.filter((x) => x !== oldest), id];
+    setPicks(ps.map((x) => (x === oldest ? id : x)));
   };
   const tag = (id: number) => {
     const n = picks.indexOf(id);
@@ -166,7 +173,7 @@ export function CharacterSelect({ size, solo = false, teams, team, setTeam, dex,
         />
       </div>
       {stats && <PlayerModal p={stats} onClose={() => setStats(null)} />}
-      {random && <RandomPicker size={size} pool={randomPool} onClose={() => setRandom(false)} onUse={(ids) => (setPicks(ids), setRandom(false))} />}
+      {random && <RandomPicker size={size} pool={randomPool} onClose={() => setRandom(false)} onUse={(ids) => ((recent.current = [...ids]), setPicks(ids), setRandom(false))} />}
     </div>
   );
 }

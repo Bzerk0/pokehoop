@@ -10,7 +10,7 @@ import { makeRng } from "./rng.ts";
 import type { RatedPokemon } from "./types.ts";
 
 export type Tier = (typeof DRAFT_TIERS)[number]["name"];
-export type Offer = { id: number; tier: Tier };
+export type Offer = { id: number; tier: Tier; pricey?: boolean }; // pricey: a STAR over your budget, shown but locked
 export type Draft = {
   seed: number;
   mode: Mode;
@@ -73,6 +73,10 @@ function deal(d: Draft, pool: RatedPokemon[], dex: Dex): Offer[] {
   const chance = d.round === 0 && d.deals === 0 ? ARCADE.firstStar : ARCADE.starChance;
   if (offers.length && !offers.some((o) => o.tier === "STAR") && stars.length && rng.next() < chance)
     offers[rng.int(offers.length)] = { id: rng.pick(stars).id, tier: "STAR" };
+  // sometimes a STAR you can't afford yet sits on a reel (in place of a non-STAR): what saving cap room would buy
+  const over = pool.filter((p) => isEligible(p, d.mode) && tierOf(p) === "STAR" && salary(p) > budget && !d.ids.includes(p.id) && !offers.some((o) => o.id === p.id));
+  const k = offers.findIndex((o) => o.tier !== "STAR");
+  if (offers.length === ARCADE.reels && k >= 0 && over.length && rng.next() < ARCADE.overChance) offers[k] = { id: rng.pick(over).id, tier: "STAR", pricey: true };
   return offers;
 }
 
@@ -83,10 +87,17 @@ export function startDraft(pool: RatedPokemon[], dex: Dex, mode: Mode, seed: num
 
 /** Put one of this round's offers on an open spot; the next round is dealt straight away. */
 export function pickOffer(d: Draft, pool: RatedPokemon[], dex: Dex, id: number, slot: number): Draft {
-  if (isOver(d) || !d.offers.some((o) => o.id === id) || d.ids[slot] !== null) return d;
+  if (isOver(d) || !d.offers.some((o) => o.id === id && !o.pricey) || d.ids[slot] !== null) return d;
   const next: Draft = { ...d, ids: d.ids.map((x, i) => (i === slot ? id : x)), round: d.round + 1, offers: [] };
   if (isOver(next)) return next;
   return { ...next, offers: deal(next, pool, dex), deals: d.deals + 1 };
+}
+
+/** Swap two roster spots (either may be open). A spot only changes how a Pokémon rates, never the payroll. */
+export function swapSpots(d: Draft, a: number, b: number): Draft {
+  const ids = [...d.ids];
+  [ids[a], ids[b]] = [ids[b], ids[a]];
+  return { ...d, ids };
 }
 
 /** Swap this round's offers for a fresh deal, if a reroll is left. */
@@ -104,7 +115,7 @@ export function chemPreview(d: Draft, id: number, dex: Dex, slot = bestSpot(d, d
 
 /** What the crowd shouts when you put `id` at `slot`. */
 export function pickCall(d: Draft, id: number, slot: number, dex: Dex): string {
-  const offered = d.offers.map((o) => dex.get(o.id)!);
+  const offered = d.offers.filter((o) => !o.pricey).map((o) => dex.get(o.id)!);
   const p = dex.get(id)!;
   const best = (x: RatedPokemon) => x.ovr[x.best];
   const value = (x: RatedPokemon) => best(x) / salary(x);

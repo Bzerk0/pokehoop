@@ -1,8 +1,10 @@
 // Pieces shared by Free Build and the Draft: the payroll meter, jersey colour pickers, share link and PNG card.
 import { toPng } from "html-to-image";
 import { useEffect, useRef, useState } from "react";
+import { randomTeamStyle, type TeamStyle } from "../../core/cpuTeam.ts";
 import { encodeLineup, type Lineup } from "../../core/lineup.ts";
 import { SALARY_CAP } from "../../core/ratingConfig.ts";
+import { makeRng } from "../../core/rng.ts";
 import { PALETTE } from "../theme/palette.ts";
 import { COLOR_NAMES, teamColor } from "./LineupCard.tsx";
 
@@ -18,18 +20,18 @@ export async function downloadCard(card: HTMLElement, teamName: string) {
 }
 
 /** Payroll against the cap: a 20-segment bar ($5M a segment), green, then gold near the cap, red over it. */
-export function CapMeter({ used }: { used: number }) {
-  const over = used > SALARY_CAP;
-  const color = over ? PALETTE.red : used > SALARY_CAP * 0.85 ? PALETTE.gold : PALETTE.lime;
+export function CapMeter({ used, noCap = false }: { used: number; noCap?: boolean }) {
+  const over = !noCap && used > SALARY_CAP;
+  const color = noCap ? PALETTE.sky : over ? PALETTE.red : used > SALARY_CAP * 0.85 ? PALETTE.gold : PALETTE.lime;
   const segments = 20;
-  const lit = Math.min(segments, Math.ceil((used / SALARY_CAP) * segments));
+  const lit = noCap ? segments : Math.min(segments, Math.ceil((used / SALARY_CAP) * segments));
   return (
     <div className="flex min-w-[240px] flex-1 flex-col gap-1">
       <span className="flex justify-between gap-3 text-[20px] leading-[20px]">
-        <span className="text-cloud">PAYROLL ${used}M OF ${SALARY_CAP}M</span>
-        <span style={{ color }}>{over ? `OVER BY $${used - SALARY_CAP}M` : `$${SALARY_CAP - used}M LEFT`}</span>
+        <span className="text-cloud">PAYROLL ${used}M{noCap ? "" : ` OF $${SALARY_CAP}M`}</span>
+        <span style={{ color }}>{noCap ? "NO CAP" : over ? `OVER BY $${used - SALARY_CAP}M` : `$${SALARY_CAP - used}M LEFT`}</span>
       </span>
-      <span className="flex gap-[2px] border-2 border-black bg-black p-[2px]" role="meter" aria-valuenow={used} aria-valuemin={0} aria-valuemax={SALARY_CAP} aria-label="Payroll">
+      <span className="flex gap-[2px] border-2 border-black bg-black p-[2px]" role="meter" aria-valuenow={used} aria-valuemin={0} aria-valuemax={noCap ? used : SALARY_CAP} aria-label="Payroll">
         {Array.from({ length: segments }, (_, i) => (
           <span key={i} className="h-[16px] flex-1" style={{ background: i < lit ? color : PALETTE.slate }} />
         ))}
@@ -38,8 +40,16 @@ export function CapMeter({ used }: { used: number }) {
   );
 }
 
+type ColorPickProps = {
+  label: string;
+  value: number;
+  onChange: (i: number) => void;
+  /** Supply on one picker to roll the team name and both jersey colours together. */
+  onRandomize?: (style: TeamStyle) => void;
+};
+
 /** A jersey colour: a swatch that opens the palette. Esc or a click elsewhere closes it. */
-export function ColorPick({ label, value, onChange }: { label: string; value: number; onChange: (i: number) => void }) {
+export function ColorPick({ label, value, onChange, onRandomize }: ColorPickProps) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -59,15 +69,17 @@ export function ColorPick({ label, value, onChange }: { label: string; value: nu
   }, [open]);
   const name = teamColor(value);
   return (
-    <div ref={box} className="relative flex items-center gap-2">
-      <span className="text-[20px] text-cloud">{label}</span>
-      <button
-        className="h-[28px] w-[44px] cursor-pointer border-2 border-white"
-        style={{ background: PALETTE[name], boxShadow: `2px 2px 0 ${PALETTE.black}` }}
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        aria-label={`${label} colour: ${name}`}
-      />
+    <div ref={box} className="relative flex flex-wrap items-center gap-2">
+      <span className="flex shrink-0 items-center gap-2">
+        <span className="text-[20px] text-cloud">{label}</span>
+        <button
+          className="h-[28px] w-[44px] cursor-pointer border-2 border-white"
+          style={{ background: PALETTE[name], boxShadow: `2px 2px 0 ${PALETTE.black}` }}
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={`${label} colour: ${name}`}
+        />
+      </span>
       {open && (
         <div className="px-box absolute left-0 top-[36px] z-20 grid w-max grid-cols-[repeat(8,20px)] gap-[4px] p-2">
           {COLOR_NAMES.map((c, i) => (
@@ -82,6 +94,19 @@ export function ColorPick({ label, value, onChange }: { label: string; value: nu
             />
           ))}
         </div>
+      )}
+      {onRandomize && (
+        <button
+          type="button"
+          className="px-btn h-[28px] !px-2 !py-0 !text-[20px]"
+          title="Randomize team name and jersey colours"
+          onClick={() => {
+            setOpen(false);
+            onRandomize(randomTeamStyle(makeRng(Date.now())));
+          }}
+        >
+          RANDOMIZE
+        </button>
       )}
     </div>
   );

@@ -247,10 +247,10 @@ export function Builder() {
         </div>
         <div className="h-[8px]" style={{ background: PALETTE[accent] }} />
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3 bg-night px-4 py-3">
-          <CapMeter used={payroll(lineup, dex)} />
-          <div className="flex gap-4">
+          <CapMeter used={payroll(lineup, dex)} noCap={lineup.noCap} />
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
             <ColorPick label="HOME" value={lineup.colors[0]} onChange={(i) => update({ ...lineup, colors: [i, lineup.colors[1]] })} />
-            <ColorPick label="ACCENT" value={lineup.colors[1]} onChange={(i) => update({ ...lineup, colors: [lineup.colors[0], i] })} />
+            <ColorPick label="ACCENT" value={lineup.colors[1]} onChange={(i) => update({ ...lineup, colors: [lineup.colors[0], i] })} onRandomize={(st) => update({ ...lineup, name: st.name, colors: st.colors })} />
           </div>
           <div className="flex gap-1" role="group" aria-label="Pool">
             {(["classic", "unlimited"] as const).map((m) => (
@@ -259,6 +259,14 @@ export function Builder() {
               </button>
             ))}
           </div>
+          <button
+            className="px-btn"
+            aria-pressed={!!lineup.noCap}
+            title="No salary cap: sign anyone (a sandbox; drafts and franchises keep the cap)"
+            onClick={() => update(lineup.noCap ? { ...lineup, noCap: undefined } : { ...lineup, noCap: true })}
+          >
+            UNLIMITED MONEY: {lineup.noCap ? "ON" : "OFF"}
+          </button>
         </div>
       </section>
 
@@ -395,7 +403,7 @@ export function Builder() {
         <div className="px-box flex max-h-[75vh] flex-col p-3 lg:max-h-none lg:min-h-0">
           <div className="mb-2 flex items-baseline justify-between font-head text-[16px] text-gold">
             <span>PICK {slot < STARTERS ? `A ${SLOTS[slot]}` : `BENCH ${slot - STARTERS + 1}`}</span>
-            <span className="font-body text-[24px] leading-[16px] text-lime">BUDGET ${budget}M</span>
+            <span className="font-body text-[24px] leading-[16px] text-lime">{lineup.noCap ? "NO CAP" : `BUDGET $${budget}M`}</span>
           </div>
           <input className="px-input mb-2" placeholder="search name or #" value={query} onChange={(e) => setQuery(e.target.value)} />
           <label className="mb-2 flex cursor-pointer items-center gap-2 text-[20px] text-cloud">

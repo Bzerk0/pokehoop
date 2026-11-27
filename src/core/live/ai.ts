@@ -9,7 +9,7 @@
 import { AI_STYLES, LIVE, LIVE_AI, type StyleName } from "../ratingConfig.ts";
 import type { RatedPokemon } from "../types.ts";
 import {
-  callPlay, callScheme, COURT, courtwards, dist, farOut, handlerOf, hoopOf, NO_INPUT, other, reachOf, spotOf, team, towardHoop,
+  backDownChance, callPlay, callScheme, canDoubleJump, COURT, courtwards, dist, farOut, handlerOf, handZ, hoopOf, NO_INPUT, other, reachOf, spotOf, team, towardHoop,
   type Game, type Input, type Player, type Side,
 } from "./game.ts";
 import { ovrOf, PLAY, PLAYS, playWeights, SCHEMES, ZONE, ZONE3, type PlayName, type SchemeName, type Spot } from "./plays.ts";
@@ -115,6 +115,15 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
     }
     if ((h && h.side === side) || ourPass) return offBall();
 
+    // A falling blocker gets one more push toward an opponent's shot, dunk or lob still above its hands.
+    if (g.poss !== side && me.act === "air" && me.vz < 0 && !me.doubled && canDoubleJump(me)
+      && (b.flight?.kind === "shot" || h?.act === "dunk" || pass?.oop)
+      && b.z > handZ(me) && dist(me, b) < LIVE.nudgeRange) {
+      go(b.x, b.y);
+      inp.shoot = !me.held;
+      return inp;
+    }
+
     // ── they have it: defend, the way the team's scheme says ──
     if ((h && h.side !== side) || pass) {
       const handler = h ?? g.players[pass!.to!];
@@ -151,6 +160,16 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
       }
       const near = foes.reduce((p, q) => (dist(q, me) < dist(p, me) ? q : p));
       const gap = dist(me, near);
+      /** A power dribble into the man in front (game.ts backDown's own conditions), if I'd likely win it. */
+      const backDown = (rate: number) => {
+        if (me.crossCool > 0 || d >= LIVE.backRange || Math.hypot(me.vx, me.vy) >= LIVE.backStill || gap >= LIVE.backReach) return false;
+        const inFront = ((near.x - me.x) * (myHoop.x - me.x) + (near.y - me.y) * (myHoop.y - me.y)) / ((gap || 1) * (d || 1)) > 0.3;
+        if (!inFront || backDownChance(me.p, near.p) < LIVE.backAiMin || g.rng.next() >= rate * dt) return false;
+        inp.x = inp.y = 0; // stick centred: into him
+        inp.cross = true;
+        holdT = 0;
+        return true;
+      };
       // is a defender in the way (ahead of me, toward the hoop)?
       const ahead = (near.x - me.x) * (myHoop.x - me.x) + (near.y - me.y) * (myHoop.y - me.y) > 0;
       const open = gap > 2.2 || !ahead;
@@ -171,7 +190,10 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
         if (range || d < LIVE.rimRange + 1.5) return shoot();
         go(myHoop.x, myHoop.y, 0.05, 99);
         inp.turbo = me.turbo > 0.2;
-        if (me.crossCool <= 0 && g.rng.next() < 3 * dt) inp.cross = true;
+        if (me.crossCool <= 0 && g.rng.next() < 3 * dt) {
+          inp.cross = true;
+          if (d < LIVE.eurostepRange) [inp.x, inp.y] = [-inp.y, inp.x]; // near the rim: the stick across = a eurostep
+        }
         return inp;
       }
 
@@ -199,6 +221,8 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
         // post up: back him down, then go up near the rim
         if (call.play === "POST UP" && isKey) {
           if (d < 2.3 || holdT > 3.5) return shoot();
+          if (backDown(LIVE.backAiPost)) return inp;
+          if (gap < LIVE.backReach && backDownChance(me.p, near.p) >= LIVE.backAiMin) return inp; // on him: plant, then back him down
           const ux = (myHoop.x - me.x) / d, uy = (myHoop.y - me.y) / d;
           inp.x = ux * 0.5; // half speed: backing down, not sprinting
           inp.y = uy * 0.5;
@@ -206,6 +230,8 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
         }
       }
 
+      // a strong big with his man right in front near the rim: back him down now and then
+      if (backDown(LIVE.backAi)) return inp;
       // driving at the rim with a man close: now and then a floater a few metres out (a quick tap) or a eurostep
       const traffic = gap < 2.5 && towardHoop(me) > LIVE.driveSpeed;
       if (traffic && d > LIVE.layupRange + 0.3 && d < LIVE.floaterRange - 0.1 && g.rng.next() < LIVE.floaterAi * st.drive * dt) {
@@ -216,6 +242,8 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
       }
       if (traffic && d < LIVE.eurostepRange && me.crossCool <= 0 && g.rng.next() < LIVE.euroAi * st.drive * dt) {
         go(myHoop.x, myHoop.y, 0.05, 99);
+        const s = g.rng.next() < 0.5 ? 1 : -1; // a eurostep needs the stick across the drive
+        [inp.x, inp.y] = [-inp.y * s, inp.x * s];
         inp.cross = true;
         return inp;
       }
@@ -255,6 +283,12 @@ export function makeAi(i: number, level: AiLevel, style?: StyleName) {
       }
       go(tx, ty, 0.05, 99);
       inp.turbo = me.turbo > 0.3 && d < 14 && d > 4;
+      const v = Math.hypot(me.vx, me.vy);
+      if (inp.cross && d < LIVE.eurostepRange && v > 0) {
+        // near the rim the stick goes across the drive (the side he was slipping to), so it's a eurostep
+        const s = Math.sign(-me.vy * (tx - me.x) + me.vx * (ty - me.y)) || 1;
+        [inp.x, inp.y] = [(-me.vy / v) * s, (me.vx / v) * s];
+      }
       return inp;
     }
 

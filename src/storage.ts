@@ -76,3 +76,25 @@ export const clearRun = () => {
     // storage blocked: nothing to clear
   }
 };
+
+// ── your best drafts (a local board: this browser only, no accounts) ─────────────────────────────
+const BEST_KEY = "s5p-best-drafts-v1";
+export const BEST_MAX = 10;
+export type BestDraft = {
+  key: string; // seed + pool + picks: one finished draft is only ever one row
+  rating: number; grade: string; ovr: number; name: string; at: number;
+  wins?: number; // the 82-game season (season.ts); rows saved before it have none and sort last
+  daily: boolean; mode: string; kind: "ARCADE" | "FULL";
+};
+export const loadBest = (): BestDraft[] => {
+  const raw = read<unknown>(BEST_KEY, []);
+  return Array.isArray(raw) ? raw.filter((b): b is BestDraft => !!b && typeof b.key === "string" && typeof b.rating === "number" && typeof b.grade === "string") : [];
+};
+/** Add a finished draft to the board (best first, top BEST_MAX kept); a draft already there is not added twice. */
+export function recordBest(entry: BestDraft): BestDraft[] {
+  const all = loadBest();
+  if (all.some((b) => b.key === entry.key)) return all;
+  const next = [...all, entry].sort((a, b) => (b.wins ?? -1) - (a.wins ?? -1) || b.rating - a.rating || a.at - b.at).slice(0, BEST_MAX);
+  write(BEST_KEY, next);
+  return next;
+}

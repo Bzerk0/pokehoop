@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { allowedIn, cpuTeam, presetPicks, type Difficulty } from "../../core/cpuTeam.ts";
+import { allowedIn, cpuTeam, presetPicks, suggestedDifficulty, type Difficulty } from "../../core/cpuTeam.ts";
 import { checkDraft, isOver, toLineup } from "../../core/draft.ts";
-import { autoFill, dexOf, emptyLineup, problems, SLOTS, STARTERS, type Lineup } from "../../core/lineup.ts";
+import { autoFill, dexOf, emptyLineup, problems, SLOTS, STARTERS, teamOvr, type Lineup } from "../../core/lineup.ts";
 import { simGame, type GameResult } from "../../core/sim/sim.ts";
 import { clock, score, totals, type Line, type TeamBox } from "../../core/stats.ts";
 import type { RatedPokemon } from "../../core/types.ts";
@@ -25,9 +25,10 @@ type Dex = Map<number, RatedPokemon>;
 export type Choice = { key: string; label: string; lineup: Lineup };
 
 /** A new player's first team: the five on the title screen start (in the order they stood), the bench is
- *  auto-filled under the cap. */
-function titleTeam(starters: unknown, pool: RatedPokemon[], dex: Dex): Choice | null {
-  if (!Array.isArray(starters) || starters.length !== STARTERS || !starters.every((id) => dex.has(id))) return null;
+ *  auto-filled under the cap. Come in some other way (no five sent) and it's a whole team auto-filled. */
+function titleTeam(starters: unknown, pool: RatedPokemon[], dex: Dex): Choice {
+  if (!Array.isArray(starters) || starters.length !== STARTERS || !starters.every((id) => dex.has(id)))
+    return { key: "title", label: "QUICK TEAM", lineup: autoFill({ ...emptyLineup("classic"), name: "STREET BALLERS" }, pool) };
   const legend = starters.some((id) => dex.get(id)!.isLegendary || dex.get(id)!.isMythical);
   const base = { ...emptyLineup(legend ? "unlimited" : "classic"), name: "STREET BALLERS", ids: SLOTS.map((_, i) => (i < STARTERS ? starters[i] : null)) };
   return { key: "title", label: "QUICK TEAM", lineup: autoFill(base, pool) };
@@ -156,12 +157,13 @@ export function PlayPage() {
       chosen?: number[] | "team"; oppPicks?: number[]; // back from a game: straight to the opponent select
     }
     | null;
-  // a brand-new player (no teams yet) gets the five from the title screen
+  // a brand-new player (no team that can play yet) gets the five from the title screen
   const teams = useMemo(() => {
     if (!dex || !data) return [];
     const mine = yourTeams(dex);
-    const quick = mine.length ? null : titleTeam(navState?.starters, data, dex);
-    return quick ? [quick] : mine;
+    // (also when none of yours can play yet, e.g. a half-built Free Build team: it stays in the list to switch to)
+    const quick = mine.some((t) => ready(t.lineup, dex)) ? null : titleTeam(navState?.starters, data, dex);
+    return quick ? [quick, ...mine] : mine;
   }, [dex, data, navState?.starters]);
   const [pick, setPick] = useState(0);
   // start on the team we were sent with (a finished draft), else the first team that's ready to play
@@ -172,7 +174,7 @@ export function PlayPage() {
     setPick(sent >= 0 ? sent : Math.max(0, teams.findIndex((t) => ready(t.lineup, dex))));
   }, [dex, teams, wanted]);
   // (back from a live game: the same difficulty, opponent and character select)
-  const [difficulty, setDifficulty] = useState<Difficulty>(navState?.difficulty ?? "PRO");
+  const [picked, setDifficulty] = useState<Difficulty | null>(navState?.difficulty ?? null); // null: the suggestion for your team
   const [oppSeed, setOppSeed] = useState(() => navState?.oppSeed ?? Date.now());
   const [result, setResult] = useState<GameResult | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -185,16 +187,23 @@ export function PlayPage() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       backBlip();
-      if (result) setResult(null);
+      if (!teams[pick]) navigate("/", { state: { menu: true } }); // no team: nothing to step back through
+      else if (result) setResult(null);
       else if (chosen) setChosen(null); // opponent select → your players
       else if (!selecting) navigate("/", { state: { menu: true } });
       // (the character select takes its own Esc)
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [result, navigate, chosen, selecting]);
+  }, [result, navigate, chosen, selecting, teams, pick]);
 
   const mine = teams[pick]?.lineup;
+  // the Pokémon you picked for this match set the fair fight, not the saved team they came from (ENTIRE TEAM: the team)
+  const pickedOvr = Array.isArray(chosen) && chosen.length && dex
+    ? chosen.reduce((s, id) => s + (dex.get(id)?.ovr[dex.get(id)!.best] ?? 0), 0) / chosen.length
+    : null;
+  const suggested: Difficulty = mine && dex ? suggestedDifficulty(pickedOvr ?? teamOvr(mine, dex) ?? 70) : "PRO";
+  const difficulty = picked ?? suggested;
   const level = mine && !allowedIn(difficulty, mine.mode) ? "ALL-STAR" : difficulty; // Champion needs Unlimited
   const cpu = useMemo(() => (data && mine ? cpuTeam(data, level, mine.mode, oppSeed) : null), [data, mine, level, oppSeed]);
   const playable = !!(mine && dex && ready(mine, dex));
@@ -227,6 +236,7 @@ export function PlayPage() {
     const back = {
       team: teams[pick].key, select: tutorial ? null : half ? "half" as const : solo ? "solo" as const : size, difficulty, oppSeed,
       chosen: tutorial ? undefined : (chosen ?? undefined), oppPicks: tutorial ? undefined : oppPicks,
+      starters: navState?.starters, // a new player's title-screen five: without them, coming back found no team
     };
     // the opponent you settled on: its eight (your picks first) and which of them play
     const away = opp ? { ...cpu, ids: oppLineup(opp) } : cpu, awayPicks = opp ? opp.map((_, i) => i) : undefined;
@@ -243,7 +253,7 @@ export function PlayPage() {
       </h1>
       <button
         className="px-btn"
-        onClick={() => (result ? setResult(null) : chosen ? setChosen(null) : selecting ? (setSelecting(null), setOppPicks([])) : navigate("/", { state: { menu: true } }))}
+        onClick={() => (!mine ? navigate("/", { state: { menu: true } }) : result ? setResult(null) : chosen ? setChosen(null) : selecting ? (setSelecting(null), setOppPicks([])) : navigate("/", { state: { menu: true } }))}
       >
         <Arrow left /> BACK<span className="hidden sm:inline"> (ESC)</span>
       </button>
@@ -307,6 +317,7 @@ export function PlayPage() {
           dex={dex}
           cpu={cpu}
           level={level}
+          suggested={suggested}
           yourMode={mine.mode}
           picks={oppPicks}
           setPicks={setOppPicks}
@@ -344,7 +355,7 @@ export function PlayPage() {
     <div className="mx-auto max-w-[1200px] p-4">
       {header}
       {!playable && <p className="px-box mb-4 p-3 text-[22px] text-red">This team can't play yet: it needs all 8 players and no rule broken (check it in Free Build).</p>}
-      <ModeSelect playable={playable} onPick={(m) => (setSelecting(m), setChosen(null), setOppPicks([]))} onTutorial={() => live(3, true)} onFranchise={() => navigate("/franchise")} />
+      <ModeSelect playable={playable} onPick={(m) => (setSelecting(m), setChosen(null), setOppPicks([]))} onTutorial={() => live(3, true)} onFranchise={() => navigate("/franchise")} onNewFranchise={() => navigate("/franchise", { state: { startOver: true } })} />
     </div>
   );
 }

@@ -107,6 +107,16 @@ export function youPick(fd: FullDraft, dex: Dex, id: number, slot: number): Full
   return runCpu(place(fd, YOU, id, slot), dex);
 }
 
+/** Swap two of your roster spots (either may be open); your picks' spots follow, since the board reads them. */
+export function swapYours(fd: FullDraft, a: number, b: number): FullDraft {
+  const to = (s: number) => (s === a ? b : s === b ? a : s);
+  return {
+    ...fd,
+    rosters: fd.rosters.map((r, t) => (t === YOU ? r.map((_, s) => r[to(s)]) : r)),
+    picks: fd.picks.map((p) => (p.team === YOU ? { ...p, slot: to(p.slot) } : p)),
+  };
+}
+
 /** Every team by rating (chemistry included), best first. */
 export const standings = (fd: FullDraft, dex: Dex) =>
   fd.names.map((name, team) => ({ team, name, rating: teamRating(lineupOf(fd, team), dex) ?? 0 })).sort((a, b) => b.rating - a.rating);

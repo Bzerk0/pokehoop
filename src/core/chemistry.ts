@@ -56,7 +56,7 @@ export const CHEMISTRY_SLUGS = [...PAIRS, ...SQUADS].flatMap(([, slugs]) => slug
 type Dex = Map<number, RatedPokemon>;
 
 /** Every chemistry link on the team, and each slot's total boost (capped at CHEM_MAX). */
-export function chemistry(l: Lineup, dex: Dex): { links: Link[]; boosts: number[] } {
+export function chemistry(l: Pick<Lineup, "ids">, dex: Dex): { links: Link[]; boosts: number[] } {
   const on = l.ids.flatMap((id, slot) => (id != null && dex.has(id) ? [{ slot, p: dex.get(id)! }] : []));
   const links: Link[] = [];
   const add = (name: string, members: typeof on, boost: number) => links.push({ name, slots: members.map((m) => m.slot), boost });

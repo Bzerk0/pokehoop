@@ -2,10 +2,12 @@
 // Three.js, no React. The view feeds in what the keys say and draws what comes out. Metres and seconds. x runs
 // across the court, y runs up it (side 0, you, always attacks the top hoop), z is height. Every make, miss, steal,
 // block and interception is a seeded dice roll when it happens.
-import { LIVE, SIM } from "../ratingConfig.ts";
+import { ABILITY, LIVE, SIM } from "../ratingConfig.ts";
+import { chemistry, type Link } from "../chemistry.ts";
 import { makeRng, type Rng } from "../rng.ts";
 import { newLine, type Line, type TeamBox } from "../stats.ts";
 import type { RatedPokemon } from "../types.ts";
+import { abilityOf, has, type AbilityKey } from "./abilities.ts";
 import { ovrOf, PLAY, type PlayName, type SchemeName } from "./plays.ts";
 
 /** The court, scaled by LIVE.courtScale (a real court × it): size, where the hoops sit, the painted lines. The rim
@@ -81,6 +83,9 @@ export type Player = {
   onFire: boolean; // ON FIRE: bigger green zone, endless turbo, until the other team scores
   euro: number; // a eurostep ("cross" act): the first plant's side (±1), the second goes back across; 0 = not one
   euroCall: "shoot" | "pass" | null; // pressed during the eurostep: how it finishes (null: the game picks)
+  post: number; // backing a defender down ("cross" act): 1 = winning ground, -1 = walled off, 0 = not one
+  postOn: number; // the defender being backed down
+  postDunk: number; // s left to dunk off a won back-down with shoot alone (no turbo needed)
   dunkStyle: DunkStyle | null; // this dunk is a special one (null: a plain slam); cleared on landing
 };
 
@@ -95,12 +100,14 @@ export type Flight = {
   oop?: boolean; // an alley-oop lob: thrown to just above the rim, caught in the air and slammed
   tested: number[]; // defenders whose block/interception was rolled
   short?: boolean; // a weak shot that never reaches the hoop (an air ball)
+  soft?: boolean; // a quick shot or floater (no meter): easier to block
+  iceCold?: boolean; // the shot qualified at release, even if the period clock changes before it lands
 };
 export type Ball = { holder: number | null; x: number; y: number; z: number; flight: Flight | null };
 
 export type EventKind =
   | "release" | "make" | "miss" | "block" | "steal" | "rebound" | "ankles" | "whiff" | "over" | "pass" | "violation"
-  | "screen" | "call" | "period" | "sub" | "fire" | "move" | "check";
+  | "screen" | "call" | "period" | "sub" | "fire" | "move" | "check" | "post"; // post: a back-down's shove (no caption)
 /** A moment for the results screen's highlights (same shape as the sim's). */
 export type Highlight = { period: number; text: string; weight: number; kind: string };
 export type GameEvent = { kind: EventKind; side: Side; text: string; who?: number; vs?: number }; // who: the player it's about; vs: the other one in it
@@ -126,6 +133,8 @@ export type Game = {
   solo: boolean; // one-character mode: you only ever steer `control` (no switching on a pass or on defence)
   calls: [Call, Call]; // each team's play and scheme
   practice: boolean; // the tutorial: no shot clock, nobody wins
+  stealAid: number; // the tutorial's STEAL step: added to your steal chance (0 otherwise)
+  chem: [Link[], Link[]]; // each team's chemistry links (team games from lineupGame; empty otherwise), shown at tip-off
   // the full game (Phase 8; `timed` games only): the clock, periods, fatigue and subs
   timed: boolean;
   period: number; // 0–3 quarters, 4+ overtime
@@ -155,8 +164,9 @@ const a = (pl: Player) => pl.p.attrs;
 export const speedOf = (pl: Player) => lerp(LIVE.speedMin, LIVE.speedMax, a(pl).speed / 99);
 export const reachOf = (pl: Player) => lerp(LIVE.reachMin, LIVE.reachMax, pl.p.heightPct / 100);
 const jumpOf = (pl: Player) => lerp(LIVE.jumpMin, LIVE.jumpMax, (a(pl).finishing + a(pl).rebounding) / 198);
-const grabOf = (pl: Player) => LIVE.grabBase + a(pl).rebounding * LIVE.grabSlope;
-/** Special abilities (prototype): Flying and Dragon types have a double jump. */
+const grabOf = (pl: Player, rebound: boolean) =>
+  (LIVE.grabBase + a(pl).rebounding * LIVE.grabSlope) * (rebound && has(pl, "rooted") ? 1 + ABILITY.rooted : 1);
+/** Flying or Dragon in either type slot keeps its original double jump. */
 export const canDoubleJump = (pl: Player) => pl.p.types.some((t) => t === "flying" || t === "dragon");
 /** Top of the player's hands right now. */
 export const handZ = (pl: Player) => pl.z + reachOf(pl);
@@ -164,9 +174,10 @@ export const handZ = (pl: Player) => pl.z + reachOf(pl);
 export const zoneAt = (d: number): Zone => (d < LIVE.rimRange ? "rim" : d >= COURT.three ? "three" : "mid");
 
 /** Half-width of the green zone (share of the meter): bigger with the rating, smaller when contested or deep. */
-export function shotWindow(rating: number, contest: number, d: number) {
+export function shotWindow(rating: number, contest: number, d: number, pl?: Player) {
   const w = lerp(LIVE.windowMin, LIVE.windowMax, rating / 99) * (1 - contest * LIVE.contestShrink);
-  return Math.max(0.02, w - Math.max(0, d - LIVE.deepFrom * COURT.scale) * LIVE.deepShrink); // "deep" moves with the arc
+  const window = Math.max(0.02, w - Math.max(0, d - LIVE.deepFrom * COURT.scale) * LIVE.deepShrink);
+  return window * (pl?.onFire ? LIVE.fireWindow : 1) * (pl && has(pl, "smooth") ? 1 + ABILITY.smooth : 1);
 }
 
 export const timingOf = (meter: number, window: number): Timing => {
@@ -184,11 +195,19 @@ export function makeChance(zone: Zone, rating: number, timing: Timing, contest: 
   return clamp(base + (rating - 60) * LIVE.ratingSlope + LIVE.timing[timing] - contest * LIVE.contestPenalty, 0.02, 0.97);
 }
 
-export const blockChance = (interiorD: number, shooterRating: number) =>
-  clamp(LIVE.blockBase + (interiorD - shooterRating) * LIVE.blockSlope, 0.05, 0.9);
+export const blockChance = (interiorD: number, shooterRating: number, ironWall = false, base = LIVE.blockBase) =>
+  clamp((base + (interiorD - shooterRating) * LIVE.blockSlope) * (ironWall ? 1 + ABILITY.ironWall : 1), 0.05, 0.9);
 
-export const interceptChance = (perimeterD: number, passing: number) =>
-  clamp(LIVE.interceptBase + (perimeterD - passing) * LIVE.interceptSlope, 0.02, 0.45);
+/** The extra block chance and reach the defender YOU steer gets (an aid for new players; the CPU's get none). */
+const assist = (g: Game, def: Player) => (def.side === 0 && def.i === g.control ? { p: LIVE.blockAssist, r: LIVE.blockAssistRange } : { p: 0, r: 0 });
+
+export const interceptChance = (perimeterD: number, passing: number, foresight = false) =>
+  clamp((LIVE.interceptBase + (perimeterD - passing) * LIVE.interceptSlope) * (foresight ? 1 + ABILITY.foresight : 1), 0.02, 0.45);
+
+function stealChance(def: Player, handler: Player, base = LIVE.stealBase) {
+  const chance = base + (a(def).perimeterD - a(handler).handles) * LIVE.stealSlope;
+  return chance * (has(def, "quickHands") ? 1 + ABILITY.quickHands : 1) * (has(handler, "sturdy") ? 1 - ABILITY.sturdy : 1);
+}
 
 // ── who's who ─────────────────────────────────────────────────────────────────
 export const team = (g: Game, side: Side) => g.players.filter((p) => p.side === side);
@@ -218,11 +237,13 @@ export function contestOn(g: Game, shooter: Player) {
   return c;
 }
 
-/** The green zone the player would get if they shot right now (the view draws it on the meter): bigger on fire. */
+const shotRating = (g: Game, pl: Player, zone: Zone) =>
+  liftRating((zone === "rim" ? a(pl).finishing : a(pl).shooting) * fresh(g, pl));
+
+/** The green zone the player would get if they released right now, including energy, SMOOTH and fire. */
 export function meterWindow(g: Game, pl: Player) {
   const d = dist(pl, hoopOf(pl.side));
-  const zone = zoneAt(d);
-  return shotWindow(zone === "rim" ? a(pl).finishing : a(pl).shooting, contestOn(g, pl), d) * (pl.onFire ? LIVE.fireWindow : 1);
+  return shotWindow(shotRating(g, pl, zoneAt(d)), contestOn(g, pl), d, pl);
 }
 
 // ── where everyone stands ───────────────────────────────────────────────────────
@@ -246,7 +267,7 @@ function player(i: number, side: Side, slot: number, p: RatedPokemon, x: number,
     i, r: slot, home: slot, sprinting: false,
     side, slot, p, x, y, z: 0, vx: 0, vy: 0, vz: 0, fx: 0, fy: side === 0 ? 1 : -1, turbo: 1, act: "free", actT: 0,
     crossCool: 0, stealCool: 0, held: false, wind: 0, dunkFrom: null, dunkTested: [], screening: false, slow: 0,
-    screenedAt: -Infinity, streak: 0, onFire: false, doubled: false, euro: 0, euroCall: null, dunkStyle: null,
+    screenedAt: -Infinity, streak: 0, onFire: false, doubled: false, euro: 0, euroCall: null, post: 0, postOn: -1, postDunk: 0, dunkStyle: null,
   };
 }
 
@@ -280,6 +301,8 @@ export function newGame(you: RatedPokemon[], cpu: RatedPokemon[], seed: number, 
     size, players, ball: { holder: 0, x: COURT.w / 2, y: 3 * k, z: 0, flight: null }, score: [0, 0],
     target: o.timed || o.practice ? Infinity : LIVE.targetBySize[size] ?? LIVE.targetScore, rng: makeRng(seed), time: 0, dead: 0,
     practice: !!o.practice,
+    stealAid: 0,
+    chem: [[], []],
     next: 0, poss: 0, shotClock: LIVE.shotClock, clockReset: false, control: 0, half: !!o.half, solo: false, over: false, winner: null, events: [],
     lastShot: null, calls: [0, 1].map(() => ({ play: null, playAt: 0, key: null, scheme: "MAN" as SchemeName })) as [Call, Call],
     timed: !!o.timed, period: 0, clock: SIM.quarterSec, inBreak: false, periods: [[0], [0]],
@@ -304,10 +327,26 @@ export function lineupGame(
     return { court: slots.map((s) => all[s].p), slots, bench: size === 1 ? [] : all.filter((e) => !slots.includes(e.slot)) };
   };
   const h = pick(home.ids, homePicks), a2 = pick(away.ids, awayPicks); // (awayPicks: the opponent you chose)
-  return newGame(h.court, a2.court, seed, {
+  // chemistry plays too (team games): each player in a link gets LIVE.chemAttr attribute points per chemistry point
+  const chem = (ids: (number | null)[], t: ReturnType<typeof pick>) => {
+    if (size === 1 || practice) return { links: [] as Link[], t };
+    const { links, boosts } = chemistry({ ids }, dex);
+    const up = (p: RatedPokemon, slot: number) => {
+      const add = Math.round(boosts[slot] * LIVE.chemAttr);
+      if (!add) return p;
+      const attrs = { ...p.attrs };
+      for (const k of Object.keys(attrs) as (keyof typeof attrs)[]) attrs[k] = Math.min(99, attrs[k] + add);
+      return { ...p, attrs };
+    };
+    return { links, t: { ...t, court: t.court.map((p, i) => up(p, t.slots[i])), bench: t.bench.map((e) => ({ ...e, p: up(e.p, e.slot) })) } };
+  };
+  const hc = chem(home.ids, h), ac = chem(away.ids, a2);
+  const g = newGame(hc.t.court, ac.t.court, seed, {
     timed: size > 1 && !practice, practice, names: [home.name || "YOU", away.name || "CPU"],
-    youSlots: h.slots, cpuSlots: a2.slots, youBench: h.bench, cpuBench: a2.bench, half,
+    youSlots: h.slots, cpuSlots: a2.slots, youBench: hc.t.bench, cpuBench: ac.t.bench, half,
   });
+  g.chem = [hc.links, ac.links];
+  return g;
 }
 
 // ── box score, fatigue, subs ─────────────────────────────────────────────────────
@@ -355,6 +394,11 @@ function stoppage(g: Game) {
 
 /** Minutes, tiredness and rest for this step. */
 function tire(g: Game, dt: number) {
+  const guarded = new Set<Player>();
+  if (g.timed && g.dead <= 0 && !g.over) {
+    for (const def of g.players)
+      if (def.side !== g.poss && has(def, "toxicD")) guarded.add(nearestFoe(g, def));
+  }
   for (const s of [0, 1] as const) {
     const playing = new Set(team(g, s).map((q) => q.r));
     g.rosters[s].forEach((e, r) => {
@@ -366,7 +410,9 @@ function tire(g: Game, dt: number) {
     e.line.sec += dt;
     if (!g.timed) continue;
     const drain = LIVE.drain * (1.5 - a(pl).stamina / 99) * (pl.sprinting ? LIVE.sprintDrain : 1);
-    e.energy = Math.max(0, e.energy - drain * dt);
+    const personal = has(pl, "scrappy") ? 1 - ABILITY.scrappy : 1;
+    const pressure = guarded.has(pl) ? 1 + ABILITY.toxicD : 1;
+    e.energy = Math.max(0, e.energy - drain * personal * pressure * dt);
   }
 }
 
@@ -430,6 +476,8 @@ function tickClock(g: Game, dt: number) {
   g.shotClock = LIVE.shotClock;
   const h = handlerOf(g);
   if (h?.act === "wind") h.act = "free";
+  // a dunker caught by the buzzer drops back down (a dunk without the ball hangs at the rim waiting for it)
+  for (const pl of g.players) if (pl.act === "dunk") Object.assign(pl, { act: "air", vx: 0, vy: 0, vz: 0 });
   const b = g.ball;
   b.holder = null;
   b.flight = {
@@ -505,7 +553,7 @@ function screens(g: Game) {
     for (const d of g.players) {
       if (d.side === s.side || holds(g, d) || d.act !== "free" || g.time - d.screenedAt < 1.5) continue;
       if (dist(d, s) > LIVE.screenRange || Math.hypot(d.vx, d.vy) < 1) continue;
-      d.slow = LIVE.screenTime;
+      d.slow = LIVE.screenTime * (has(s, "heavy") ? 1 + ABILITY.heavy : 1);
       d.screenedAt = g.time;
       d.vx *= 0.2;
       d.vy *= 0.2;
@@ -516,9 +564,15 @@ function screens(g: Game) {
 
 const emit = (g: Game, kind: EventKind, side: Side, text: string, who?: number, vs?: number) => g.events.push({ kind, side, text, who, vs });
 
+function abilityMove(g: Game, pl: Player, key: AbilityKey) {
+  const ability = abilityOf(pl.p);
+  if (ability.key === key) emit(g, "move", pl.side, `${ability.name}!`, pl.i);
+}
+
 function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
   pl.actT -= dt;
   pl.crossCool = Math.max(0, pl.crossCool - dt);
+  pl.postDunk = Math.max(0, pl.postDunk - dt);
   pl.stealCool = Math.max(0, pl.stealCool - dt);
   pl.slow = Math.max(0, pl.slow - dt);
   // a screen only counts while you're planted (no ball, on the floor, barely moving)
@@ -533,6 +587,10 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
   const sx = len > 0.1 ? inp.x / Math.max(1, len) : 0, sy = len > 0.1 ? inp.y / Math.max(1, len) : 0;
   let want = 1; // share of top speed wanted
   let control = true;
+  // you: the pass key switches on defence (like the big basketball games), whatever you're facing or doing
+  // (mid-jump or stumbling from a whiffed steal too)
+  const steered = pl.side === 0 && pl.i === g.control; // (before any switch: this input is still yours)
+  if (!hasBall && inp.steal && steered && !g.solo) switchControl(g);
 
   switch (pl.act) {
     case "stumble":
@@ -541,7 +599,7 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
       break;
     case "air":
       control = false;
-      // a special ability (prototype): Flying and Dragon types can jump again once in the air
+      // a fresh press gives Flying and Dragon types one more jump
       if (pressed && !hasBall && !pl.doubled && canDoubleJump(pl)) {
         pl.doubled = true;
         pl.vz = jumpOf(pl) * LIVE.doubleJump;
@@ -578,6 +636,18 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
       return;
     case "cross":
       control = false;
+      if (pl.post) {
+        // backing him down: one hard shoulder into the man toward the rim (LIVE.backShove s); a win keeps driving
+        // him back (backCarry) for the rest, a loss budges him a little and you're planted
+        const hoop = hoopOf(pl.side), hd = dist(pl, hoop) || 1, won = pl.post > 0;
+        const shoving = LIVE.backTime - pl.actT < LIVE.backShove;
+        const sp = shoving ? LIVE.backPush * (won ? 1 : LIVE.backLoss) : won ? LIVE.backCarry : 0;
+        pl.vx = ((hoop.x - pl.x) / hd) * sp;
+        pl.vy = ((hoop.y - pl.y) / hd) * sp;
+        const def = g.players[pl.postOn];
+        if (def) (def.x += pl.vx * dt), (def.y += pl.vy * dt); // he gives ground either way (a loss only a little)
+      }
+      if (pl.post > 0 && hasBall && pressed) pl.euroCall = "shoot"; // kept for the end: the dunk if he's under the rim
       if (pl.euro) {
         // a eurostep: one plant to the side, then back across, still going at the rim (easing off right under it)
         const hoop = hoopOf(pl.side), hd = dist(pl, hoop) || 1, ux = (hoop.x - pl.x) / hd, uy = (hoop.y - pl.y) / hd;
@@ -590,11 +660,39 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
       }
       if (pl.actT <= 0) {
         const finish = pl.euro !== 0 && hasBall, call = pl.euroCall;
+        if (pl.post) {
+          const def = g.players[pl.postOn];
+          if (pl.post > 0) {
+            if (def) def.slow = Math.max(def.slow, LIVE.backSlow);
+            emit(g, "move", pl.side, "BACKED DOWN!", pl.i, def?.i);
+            pl.postDunk = LIVE.backDunk;
+          } else {
+            pl.slow = Math.max(pl.slow, LIVE.backStall);
+            emit(g, "move", pl.side, "WALLED OFF!", pl.i, def?.i);
+          }
+          pl.post = 0;
+          pl.postOn = -1;
+          if (pl.postDunk > 0 && call === "shoot" && hasBall && dist(pl, hoopOf(pl.side)) < LIVE.dunkRange) {
+            pl.euroCall = null;
+            return startDunk(g, pl);
+          }
+        }
         pl.act = "free";
         pl.euro = 0;
         pl.euroCall = null;
         if (finish) {
           // the eurostep's finish: what you called, else the game's pick (the layup, or crowded, a dish to the open man)
+          // the counter: a defender who stayed on him through both plants (not one held up) can strip it
+          const guard = g.players.find((d) => d.side !== pl.side && d.act === "free" && d.slow <= 0 && dist(d, pl) < LIVE.euroGuard);
+          if (guard && g.rng.next() < stealChance(guard, pl, LIVE.euroStrip)) {
+            lineOf(g, guard).stl++;
+            lineOf(g, pl).to++;
+            note(g, "steal", `${guard.p.name} strips ${pl.p.name} on the eurostep!`, 2);
+            gain(g, guard);
+            emit(g, "steal", guard.side, "STRIPPED!", guard.i, pl.i);
+            abilityMove(g, guard, "quickHands");
+            return;
+          }
           const hoop = hoopOf(pl.side), mate = call === "shoot" ? null : euroDish(g, pl, call === "pass");
           if (mate) {
             emit(g, "move", pl.side, "DISH!", pl.i, mate.i);
@@ -607,7 +705,7 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
       const target = inp.passTo != null ? g.players[inp.passTo] : null;
       if (inp.screen && !hasBall) want = 0; // setting a screen: plant your feet
       if (hasBall && pressed) {
-        if (inp.turbo && dist(pl, hoopOf(pl.side)) < LIVE.dunkRange) return startDunk(g, pl);
+        if ((inp.turbo || pl.postDunk > 0) && dist(pl, hoopOf(pl.side)) < LIVE.dunkRange) return startDunk(g, pl);
         pl.act = "wind";
         pl.wind = 0;
         want = 0;
@@ -621,6 +719,7 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
         control = false;
       } else if (!hasBall && pressed) {
         pl.act = "air"; // jump: block or rebound
+        pl.doubled = false;
         pl.vz = jumpOf(pl);
         control = false;
         // aimed for you: drift toward a shot going up nearby (keeping any speed you had: a sprint stays a sprint).
@@ -635,9 +734,7 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
       } else if (!hasBall && inp.steal && pl.side === 0 && pl.i === g.control && g.solo) {
         const h = handlerOf(g); // one-character mode: the pass key calls for the ball
         if (h && h.side === 0 && h.act === "free" && !g.ball.flight) passBall(g, h, pl);
-      } else if (!hasBall && inp.steal && pl.side === 0 && pl.i === g.control) {
-        switchControl(g); // you: the pass key switches on defence (like the big basketball games)
-      } else if (!hasBall && pl.stealCool <= 0 && (pl.side === 0 && pl.i === g.control ? inp.cross : inp.steal)) {
+      } else if (!hasBall && pl.stealCool <= 0 && (steered ? inp.cross : inp.steal)) {
         trySteal(g, pl); // you steal with the crossover key; the CPU's brains still say steal
         control = false;
       }
@@ -651,7 +748,8 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
     pl.sprinting = turbo && !pl.onFire; // on fire, sprinting is free
     pl.turbo = clamp(pl.turbo + (pl.sprinting ? -LIVE.turboDrain : LIVE.turboRegen) * dt, 0, 1);
     const legs = g.timed ? LIVE.tiredSpeed + (1 - LIVE.tiredSpeed) * (energyOf(g, pl) / 100) : 1; // tired legs
-    const top = speedOf(pl) * want * legs * (hasBall ? LIVE.dribbleSlow : 1) * (turbo ? LIVE.turboBoost : 1) * (pl.slow > 0 ? LIVE.screenSlow : 1);
+    const sprint = turbo ? LIVE.turboBoost * (has(pl, "static") ? 1 + ABILITY.static : 1) : 1;
+    const top = speedOf(pl) * want * legs * (hasBall ? LIVE.dribbleSlow : 1) * sprint * (pl.slow > 0 ? LIVE.screenSlow : 1);
     const tx = sx * top, ty = sy * top;
     const dvx = tx - pl.vx, dvy = ty - pl.vy, dv = Math.hypot(dvx, dvy), max = LIVE.accel * dt;
     const k = dv > max ? max / dv : 1;
@@ -672,17 +770,27 @@ function movePlayer(g: Game, pl: Player, inp: Input, dt: number) {
 
 function bumpApart(g: Game) {
   const ps = g.players;
+  const reboundHoop = g.ball.flight?.kind === "shot" || g.reboundable ? hoopOf(g.poss) : null;
   for (let i = 0; i < ps.length; i++)
     for (let j = i + 1; j < ps.length; j++) {
       const p = ps[i], q = ps[j];
       if (p.act === "dunk" || q.act === "dunk") continue;
       const d = dist(p, q);
       if (d >= LIVE.bump || d === 0) continue;
-      const push = (LIVE.bump - d) / 2, ux = (q.x - p.x) / d, uy = (q.y - p.y) / d;
-      p.x = clamp(p.x - ux * push, 0.3, COURT.w - 0.3);
-      p.y = clamp(p.y - uy * push, 0.3, COURT.l - 0.3);
-      q.x = clamp(q.x + ux * push, 0.3, COURT.w - 0.3);
-      q.y = clamp(q.y + uy * push, 0.3, COURT.l - 0.3);
+      const overlap = LIVE.bump - d, ux = (q.x - p.x) / d, uy = (q.y - p.y) / d;
+      let pPush = overlap / 2;
+      const ball = g.ball.holder, h = p.i === ball ? p : q.i === ball ? q : null;
+      if (h && p.side !== q.side && !h.post) pPush = overlap * (h === p ? LIVE.bumpHold : 1 - LIVE.bumpHold); // a defender holds his ground: back him down instead
+      if (reboundHoop && p.side !== q.side) {
+        // The player with inside position holds more ground on contact when boxing out with ROOTED.
+        const inside = dist(p, reboundHoop) < dist(q, reboundHoop) ? p : q;
+        if (has(inside, "rooted")) pPush *= inside === p ? 1 - ABILITY.rooted : 1 + ABILITY.rooted;
+      }
+      const qPush = overlap - pPush;
+      p.x = clamp(p.x - ux * pPush, 0.3, COURT.w - 0.3);
+      p.y = clamp(p.y - uy * pPush, 0.3, COURT.l - 0.3);
+      q.x = clamp(q.x + ux * qPush, 0.3, COURT.w - 0.3);
+      q.y = clamp(q.y + uy * qPush, 0.3, COURT.l - 0.3);
     }
 }
 
@@ -713,6 +821,9 @@ function inLane(g: Game, from: Player, to: Player) {
   });
 }
 
+/** Receiver Finishing needed for this passer to throw an alley-oop. */
+export const oopFinishing = (passer: Player) => LIVE.oopFinishing - (has(passer, "charm") ? ABILITY.charm : 0);
+
 /** Throw it to a teammate, leading them a little: a lob over the top if a defender's in the lane (slower, but it can
  *  only be picked off where it comes down). Weak passers are less accurate; your control follows the ball. */
 export function passBall(g: Game, from: Player, to: Player) {
@@ -726,7 +837,9 @@ export function passBall(g: Game, from: Player, to: Player) {
   g.ball.holder = null;
   // to a good finisher already near the rim (and not a hand-off): an alley-oop, lobbed to just above the rim, where the
   // receiver will be at the top of the leap
-  const hoop = hoopOf(to.side), oop = to.act === "free" && dist(to, hoop) < LIVE.oopRange && d > 2.5 && d < LIVE.oopPassMax && a(to).finishing >= LIVE.oopFinishing;
+  const hoop = hoopOf(to.side);
+  const oop = to.act === "free" && dist(to, hoop) < LIVE.oopRange && d > 2.5 && d < LIVE.oopPassMax
+    && a(to).finishing >= oopFinishing(from) && a(from).passing >= LIVE.oopPassing;
   if (oop) {
     const z1 = COURT.rimZ + LIVE.dunkApex;
     g.ball.flight = {
@@ -736,6 +849,7 @@ export function passBall(g: Game, from: Player, to: Player) {
     g.lastPass = { side: from.side, by: from.r, to: to.r, at: g.time };
     emit(g, "pass", from.side, "", from.i, to.i);
     emit(g, "move", to.side, "ALLEY-OOP!", to.i, from.i);
+    if (a(to).finishing < LIVE.oopFinishing) abilityMove(g, from, "charm");
     return;
   }
   g.ball.flight = {
@@ -781,6 +895,9 @@ function blockTarget(g: Game, pl: Player): { x: number; y: number } | null {
 const chasing = (def: Player, shooter: Player) =>
   dist(def, hoopOf(shooter.side)) > dist(shooter, hoopOf(shooter.side)) && Math.hypot(def.vx, def.vy) > LIVE.chaseSpeed;
 
+const blockRange = (def: Player, chase: boolean) =>
+  chase ? LIVE.chaseRange * (has(def, "sneak") ? 1 + ABILITY.sneak : 1) : LIVE.blockRange;
+
 /** How much of the make chance is left from long range (1 inside longFrom): exponential falloff over a distance
  *  that grows with Shooting and Strength on a steep curve. */
 export function longShotFactor(shooting: number, strength: number, d: number) {
@@ -811,15 +928,25 @@ export function towardHoop(pl: Player) {
   return (pl.vx * (hoop.x - pl.x) + pl.vy * (hoop.y - pl.y)) / d;
 }
 
+/** Roll once at release. A late-clock make gets its move text when the ball actually goes in. */
+function rollShot(g: Game, pl: Player, zone: Zone, timing: Timing, base: number) {
+  const iceCold = has(pl, "iceCold") && ((!g.practice && g.shotClock < ABILITY.iceClock) || (g.timed && g.clock < ABILITY.iceClock));
+  const chance = iceCold ? Math.min(0.97, base * (1 + ABILITY.iceCold)) : base;
+  const made = chance > 0 && g.rng.next() < chance;
+  g.lastShot = { side: pl.side, zone, timing, chance, made };
+  return { made, iceCold };
+}
+
+const finishContest = (g: Game, pl: Player) => contestOn(g, pl) * (has(pl, "brawler") ? 1 - ABILITY.brawler : 1);
+
 /** A quick tap right under the rim: a layup, laid soft off the glass (Finishing, not Shooting, decides it). On the
  *  move a few metres out: a floater, lofted high over the big (Finishing and Shooting; a contest counts half). */
 function layup(g: Game, pl: Player, hoop: { x: number; y: number }, floater = false) {
-  const contest = contestOn(g, pl) * (floater ? 0.5 : 1);
+  const contest = floater ? contestOn(g, pl) * 0.5 : finishContest(g, pl);
   const rating = liftRating((floater ? (a(pl).finishing + a(pl).shooting) / 2 : a(pl).finishing) * fresh(g, pl));
   const chance = clamp(makeChance(floater ? "mid" : "rim", rating, "good", contest) + (floater ? LIVE.floaterBonus : LIVE.layupBonus), 0.02, 0.97);
-  const made = g.rng.next() < chance;
+  const shot = rollShot(g, pl, floater ? zoneAt(dist(pl, hoop)) : "rim", "good", chance);
   lineOf(g, pl).fga++;
-  g.lastShot = { side: pl.side, zone: floater ? zoneAt(dist(pl, hoop)) : "rim", timing: "good", chance, made };
   pl.act = "air";
   pl.vz = 3.6;
   const dd = dist(pl, hoop) || 1;
@@ -829,7 +956,7 @@ function layup(g: Game, pl: Player, hoop: { x: number; y: number }, floater = fa
   const z0 = reachOf(pl) + 0.4;
   g.ball.flight = {
     kind: "shot", x0: pl.x, y0: pl.y, z0, x1: hoop.x, y1: hoop.y, z1: COURT.rimZ, peak: COURT.rimZ + (floater ? 2.3 : 0.7), t: 0,
-    dur: floater ? 0.8 : 0.5, made, points: 2, by: pl.i, to: null, tested: [],
+    dur: floater ? 0.8 : 0.5, ...shot, points: 2, by: pl.i, to: null, tested: [], soft: floater,
   };
   emit(g, "release", pl.side, floater ? "FLOATER" : "LAYUP", pl.i);
 }
@@ -840,9 +967,9 @@ function shoot(g: Game, pl: Player) {
   if (pl.wind < LIVE.quickTap && d < LIVE.layupRange) return layup(g, pl, hoop); // a quick tap under the rim
   if (pl.wind < LIVE.quickTap && d < LIVE.floaterRange && towardHoop(pl) > LIVE.driveSpeed) return layup(g, pl, hoop, true); // on the move: a floater
   const zone = zoneAt(d);
-  const rating = liftRating((zone === "rim" ? a(pl).finishing : a(pl).shooting) * fresh(g, pl));
+  const rating = shotRating(g, pl, zone);
   const contest = contestOn(g, pl);
-  const meter = pl.wind / LIVE.meterTime, win = shotWindow(rating, contest, d) * (pl.onFire ? LIVE.fireWindow : 1);
+  const meter = pl.wind / LIVE.meterTime, win = shotWindow(rating, contest, d, pl);
   const line = lineOf(g, pl);
   line.fga++;
   if (zone === "three") line.tpa++;
@@ -854,8 +981,7 @@ function shoot(g: Game, pl: Player) {
   const short = !quick && meter < weakBelow;
   const base = short ? 0 : quick ? quickChance(zone, rating, contest, d) : makeChance(zone, rating, timing, contest);
   const chance = base * longShotFactor(liftRating(a(pl).shooting * fresh(g, pl)), a(pl).strength, d); // half/full court: rare
-  const made = !short && g.rng.next() < chance;
-  g.lastShot = { side: pl.side, zone, timing, chance, made };
+  const shot = rollShot(g, pl, zone, timing, chance);
   pl.act = "air"; // the jump shot
   pl.vz = 3.2;
   pl.vx = pl.vy = 0;
@@ -864,8 +990,8 @@ function shoot(g: Game, pl: Player) {
   const z0 = reachOf(pl) + 0.3;
   g.ball.flight = {
     kind: "shot", x0: pl.x, y0: pl.y, z0, x1: lerp(pl.x, hoop.x, reach), y1: lerp(pl.y, hoop.y, reach), z1: short ? 0 : COURT.rimZ,
-    peak: short ? z0 + 0.4 + d * reach * 0.12 : COURT.rimZ + 1.2 + d * 0.12, t: 0, dur: 0.55 + d * reach * 0.045, made,
-    points: zone === "three" ? 3 : 2, by: pl.i, to: null, tested: [], short,
+    peak: short ? z0 + 0.4 + d * reach * 0.12 : COURT.rimZ + 1.2 + d * 0.12, t: 0, dur: 0.55 + d * reach * 0.045, ...shot,
+    points: zone === "three" ? 3 : 2, by: pl.i, to: null, tested: [], short, soft: quick,
   };
   emit(g, "release", pl.side, quick ? "QUICK" : timing === "perfect" ? "PERFECT" : timing === "good" ? "GOOD" : meter > 1 ? "LATE" : "EARLY");
 }
@@ -891,8 +1017,8 @@ function dunkStep(g: Game, pl: Player) {
   pl.x = lerp(from.x, hoop.x, s);
   pl.y = lerp(from.y, hoop.y + toward, s);
   pl.z = Math.sin(s * Math.PI * 0.5) * Math.max(0.3, COURT.rimZ + LIVE.dunkApex - reachOf(pl)); // easing up to the apex
-  const has = holds(g, pl); // (an alley-oop: still in the air on its way)
-  if (has) {
+  const hasBall = holds(g, pl); // (an alley-oop: still in the air on its way)
+  if (hasBall) {
     g.ball.x = pl.x;
     g.ball.y = pl.y;
     g.ball.z = pl.z + reachOf(pl);
@@ -901,29 +1027,29 @@ function dunkStep(g: Game, pl: Player) {
   for (const def of g.players) {
     if (def.side === pl.side || def.act !== "air" || pl.dunkTested.includes(def.i)) continue;
     const chase = chasing(def, pl); // sprinting in from behind: more reach, a better chance
-    if (dist(def, pl) >= (chase ? LIVE.chaseRange : LIVE.blockRange) || handZ(def) < g.ball.z - 0.3) continue;
+    const aid = assist(g, def);
+    if (dist(def, pl) >= blockRange(def, chase) + aid.r || handZ(def) < g.ball.z - 0.3) continue;
     pl.dunkTested.push(def.i);
-    if (g.rng.next() < blockChance(a(def).interiorD, a(pl).finishing) + (chase ? LIVE.chaseBonus : 0)) {
+    if (g.rng.next() < blockChance(a(def).interiorD, a(pl).finishing, has(def, "ironWall")) + (chase ? LIVE.chaseBonus : 0) + aid.p) {
       pl.act = "air";
       pl.vz = 0;
       return blocked(g, def, g.ball, chase);
     }
   }
-  if (pl.actT > 0 || !has) return; // an alley-oop hangs at the top until the lob arrives
+  if (pl.actT > 0 || !hasBall) return; // an alley-oop hangs at the top until the lob arrives
   // at the rim: the roll
-  const contest = contestOn(g, pl);
+  const contest = finishContest(g, pl);
   const chance = clamp(makeChance("rim", a(pl).finishing * fresh(g, pl), "good", contest) + 0.1, 0.02, 0.97);
   lineOf(g, pl).fga++;
-  const made = g.rng.next() < chance;
-  g.lastShot = { side: pl.side, zone: "rim", timing: "good", chance, made };
+  const shot = rollShot(g, pl, "rim", "good", chance);
   pl.act = "air";
   pl.vz = -LIVE.dunkSlam; // pulled down with it
   g.ball.holder = null;
   // the slam: from the apex straight down, speeding up all the way (a peak this high makes the arc a pure ease-in)
-  const z0 = g.ball.z, z1 = made ? COURT.rimZ - 0.25 : COURT.rimZ;
+  const z0 = g.ball.z, z1 = shot.made ? COURT.rimZ - 0.25 : COURT.rimZ;
   g.ball.flight = {
     kind: "shot", x0: g.ball.x, y0: g.ball.y, z0, x1: hoop.x, y1: hoop.y, z1,
-    peak: (z0 + z1) / 2 + (z0 - z1) / 4, t: 0, dur: LIVE.dunkSlamTime, made, points: 2, by: pl.i, to: null,
+    peak: (z0 + z1) / 2 + (z0 - z1) / 4, t: 0, dur: LIVE.dunkSlamTime, ...shot, points: 2, by: pl.i, to: null,
     tested: g.players.map((q) => q.i), // too late to block now
   };
   emit(g, "release", pl.side, a(pl).finishing >= 70 ? "DUNK" : "LAYUP", pl.i);
@@ -936,7 +1062,17 @@ function crossover(g: Game, pl: Player, sx: number, sy: number) {
   // pushing away from the hoop: a step-back, a hop straight back to make room for the shot
   const hoop = hoopOf(pl.side), hd = dist(pl, hoop) || 1;
   const stepBack = (dx * (hoop.x - pl.x) + dy * (hoop.y - pl.y)) / hd < -0.5;
-  if (!stepBack && hd < LIVE.eurostepRange && towardHoop(pl) > LIVE.driveSpeed) return eurostep(g, pl, sx, sy); // driving at the rim
+  // on the move near the rim, stick off to the side of the drive (not straight at the rim): a eurostep. Judged
+  // against the line to the rim, not your velocity: turning the stick turns you before the second tap lands
+  const sm = Math.hypot(sx, sy), vm = Math.hypot(pl.vx, pl.vy);
+  const across = sm > 0 && Math.abs((sx * (hoop.x - pl.x) + sy * (hoop.y - pl.y)) / (sm * hd)) < LIVE.euroAcross;
+  if (!stepBack && across && hd < LIVE.eurostepRange && vm > LIVE.driveSpeed) return eurostep(g, pl, sx, sy);
+  // near the rim, barely moving, a man in front, stick not pulling away from him: back him down
+  const man = nearestFoe(g, pl), md = dist(man, pl) || 1;
+  const inFront = ((man.x - pl.x) * (hoop.x - pl.x) + (man.y - pl.y) * (hoop.y - pl.y)) / (md * hd) > 0.3;
+  const into = sm === 0 ? 0 : (sx * (man.x - pl.x) + sy * (man.y - pl.y)) / (sm * md);
+  const settled = vm < LIVE.backStill || (into > 0.5 && md < LIVE.backContact); // still, or leaning right into him
+  if (!stepBack && hd < LIVE.backRange && settled && md < LIVE.backReach && inFront && into >= 0) return backDown(g, pl, man);
   pl.euro = 0;
   const top = speedOf(pl) * LIVE.crossBoost * (stepBack ? LIVE.stepBackBoost : 1);
   pl.vx = dx * top;
@@ -947,10 +1083,12 @@ function crossover(g: Game, pl: Player, sx: number, sy: number) {
   if (stepBack) emit(g, "move", pl.side, "STEP BACK", pl.i);
   const def = nearestFoe(g, pl);
   const odds = (LIVE.anklesChance + (a(pl).handles - a(def).perimeterD) * 0.005) * (stepBack ? 0.5 : 1);
-  if (def.act === "free" && dist(def, pl) < 1.8 && g.rng.next() < odds) {
+  const phase = has(pl, "phase") ? 1 + ABILITY.phase : 1;
+  if (def.act === "free" && dist(def, pl) < 1.8 && g.rng.next() < odds * phase) {
     def.act = "stumble";
-    def.actT = LIVE.ankles;
+    def.actT = LIVE.ankles * phase;
     emit(g, "ankles", pl.side, "ANKLES!", pl.i, def.i);
+    abilityMove(g, pl, "phase");
     note(g, "ankles", `${pl.p.name} breaks ${def.p.name}'s ankles!`, 2);
   }
 }
@@ -982,17 +1120,40 @@ function eurostep(g: Game, pl: Player, sx: number, sy: number) {
   emit(g, "move", pl.side, "EUROSTEP", pl.i, fooled ? def.i : undefined);
 }
 
+/** How much a player throws around in the post: strength, size (weight, on a log scale) and, for the one with the
+ *  ball, finishing; for the defender, interior D. */
+export function postPower(p: RatedPokemon, offence: boolean) {
+  const size = clamp(14 * Math.log2(p.weightKg + 1), 0, 99);
+  return 0.45 * p.attrs.strength + 0.3 * size + 0.25 * (offence ? p.attrs.finishing : p.attrs.interiorD);
+}
+/** The chance a back-down wins ground: even players are LIVE.backBase, LIVE.backSlope per point of post power. */
+export const backDownChance = (off: RatedPokemon, def: RatedPokemon) =>
+  clamp(LIVE.backBase + (postPower(off, true) - postPower(def, false)) * LIVE.backSlope, LIVE.backMin, 1 - LIVE.backMin);
+
+/** Backing the man down (a power dribble into him): decided at the start by who's stronger and bigger. */
+function backDown(g: Game, pl: Player, def: Player) {
+  pl.euro = 0;
+  pl.post = g.rng.next() < backDownChance(pl.p, def.p) ? 1 : -1;
+  pl.postOn = def.i;
+  pl.act = "cross";
+  pl.actT = LIVE.backTime;
+  pl.crossCool = LIVE.crossCool;
+  if (pl.post > 0) def.slow = Math.max(def.slow, LIVE.backTime); // he gives ground while it lasts
+  emit(g, "post", pl.side, "POWER DRIBBLE", pl.i, def.i);
+}
+
 function trySteal(g: Game, pl: Player) {
   pl.stealCool = LIVE.stealCool;
   const h = handlerOf(g);
   const canReach = h && h.side !== pl.side && dist(pl, h) < LIVE.stealRange && h.act !== "cross" && h.act !== "dunk";
-  if (h && canReach && g.rng.next() < LIVE.stealBase + (a(pl).perimeterD - a(h).handles) * LIVE.stealSlope) {
+  if (h && canReach && g.rng.next() < stealChance(pl, h) + (pl.side === 0 ? g.stealAid : 0)) {
     if (h.act === "wind") h.act = "free";
     lineOf(g, pl).stl++;
     lineOf(g, h).to++;
     note(g, "steal", `${pl.p.name} picks ${h.p.name}'s pocket!`, 2);
     gain(g, pl);
     emit(g, "steal", pl.side, "STEAL!", pl.i, h.i);
+    abilityMove(g, pl, "quickHands");
     return;
   }
   pl.act = "stumble";
@@ -1014,6 +1175,8 @@ function blocked(g: Game, def: Player, from: { x: number; y: number; z: number }
   loose(g, from, { x: from.x + Math.cos(ang) * far, y: from.y + Math.sin(ang) * far }, from.z + 0.8, 0.6);
   g.lastShot = g.lastShot && { ...g.lastShot, made: false };
   emit(g, "block", def.side, chase ? "CHASE-DOWN BLOCK!" : "BLOCKED!", def.i, shooter?.i);
+  abilityMove(g, def, "ironWall");
+  if (chase) abilityMove(g, def, "sneak");
 }
 
 function loose(g: Game, from: { x: number; y: number; z: number }, to: { x: number; y: number }, peak: number, dur: number) {
@@ -1151,11 +1314,12 @@ function moveBall(g: Game, dt: number) {
       const sh = g.players[f.by];
       for (const def of g.players) {
         if (def.side === sh.side || def.act !== "air" || f.tested.includes(def.i)) continue;
-        const chase = chasing(def, sh);
-        if (dist(def, b) >= (chase ? LIVE.chaseRange : LIVE.blockRange) || handZ(def) < b.z - 0.2) continue;
+        const chase = chasing(def, sh), aid = assist(g, def);
+        if (dist(def, b) >= blockRange(def, chase) + aid.r || handZ(def) < b.z - 0.2) continue;
         f.tested.push(def.i);
         const rating = zoneAt(dist(sh, hoopOf(sh.side))) === "rim" ? a(sh).finishing : a(sh).shooting;
-        if (g.rng.next() < blockChance(a(def).interiorD, rating) + (chase ? LIVE.chaseBonus : 0)) return blocked(g, def, b, chase);
+        const odds = blockChance(a(def).interiorD, rating, has(def, "ironWall")) + (chase ? LIVE.chaseBonus : 0) + aid.p + (f.soft ? LIVE.softBlock : 0);
+        if (g.rng.next() < odds) return blocked(g, def, b, chase);
       }
     }
     if (f.kind === "pass") return passStep(g, f, s);
@@ -1192,14 +1356,17 @@ function moveBall(g: Game, dt: number) {
             q.onFire = false;
           }
         shooter.streak++;
-        if (shooter.streak >= LIVE.fireAfter && !shooter.onFire) {
+        const fireAfter = LIVE.fireAfter - (has(shooter, "heatCheck") ? ABILITY.heatCheck : 0);
+        if (shooter.streak >= fireAfter && !shooter.onFire) {
           shooter.onFire = true;
           emit(g, "fire", side, `${shooter.p.name.toUpperCase()} IS ON FIRE!`);
+          abilityMove(g, shooter, "heatCheck");
           note(g, "fire", `${shooter.p.name} catches fire!`, 3);
         }
         if (f.points === 3) note(g, "three", `${shooter.p.name} drains a three!`, 2);
         else if (f.dur < 0.2 && a(shooter).finishing >= 70) note(g, "dunk", `${shooter.p.name} throws it down!`, 2); // a dunk
         emit(g, "make", side, f.points === 3 ? "THREE!" : g.lastShot?.timing === "perfect" ? "SWISH!" : "SCORE!", f.by);
+        if (f.iceCold) abilityMove(g, shooter, "iceCold");
         if (g.score[side] >= g.target) {
           g.over = true;
           g.winner = side;
@@ -1238,16 +1405,28 @@ function passStep(g: Game, f: Flight, s: number) {
     if (leaving || def.side === passer.side || f.tested.includes(def.i) || def.act === "stumble") continue;
     if (dist(def, b) >= LIVE.interceptRange || handZ(def) < b.z) continue;
     f.tested.push(def.i);
-    if (g.rng.next() < interceptChance(a(def).perimeterD, a(passer).passing)) {
+    if (g.rng.next() < interceptChance(a(def).perimeterD, a(passer).passing, has(def, "foresight"))) {
       lineOf(g, def).stl++;
       lineOf(g, passer).to++;
       note(g, "steal", `${def.p.name} jumps the lane and picks it off!`, 2);
       gain(g, def);
-      emit(g, "steal", def.side, "PICKED OFF!");
+      emit(g, "steal", def.side, "PICKED OFF!", def.i, passer.i);
+      abilityMove(g, def, "foresight");
       return;
     }
   }
   if (f.oop) {
+    // the counter: a defender who goes up at the lob can swat it away
+    if (s > 0.6)
+      for (const def of g.players) {
+        if (def.side === passer.side || def.act !== "air" || f.tested.includes(100 + def.i)) continue;
+        if (dist(def, b) >= LIVE.blockRange + 0.4 || handZ(def) < b.z - 0.2) continue;
+        f.tested.push(100 + def.i); // (offset: the interception roll above used the plain index)
+        if (g.rng.next() < blockChance(a(def).interiorD, a(rec).finishing, has(def, "ironWall"), LIVE.oopSwat)) {
+          if (rec.act === "dunk") rec.act = "air";
+          return blocked(g, def, b);
+        }
+      }
     if (rec.act === "free" && (1 - s) * f.dur <= LIVE.dunkTime) startDunk(g, rec); // take off: at the top as it arrives
     if (s < 1) return;
     if (rec.act === "dunk") return gain(g, rec); // caught in the air: dunkStep slams it
@@ -1269,7 +1448,7 @@ function grab(g: Game): boolean {
   for (const pl of g.players) {
     if (pl.act === "stumble") continue;
     const d = dist(pl, b);
-    if (d < grabOf(pl) && handZ(pl) >= b.z && d < bestD) {
+    if (d < grabOf(pl, g.reboundable) && handZ(pl) >= b.z && d < bestD) {
       best = pl;
       bestD = d;
     }

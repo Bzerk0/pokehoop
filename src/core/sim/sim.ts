@@ -1,9 +1,10 @@
 // The game simulator (PLAN.md §9): seeded, possession by possession. Each possession picks a shooter, checks for a
 // turnover, picks a shot (rim, mid, three), checks for a block, rolls the make against the matched defender, then
-// rebound and assist. Players tire on the court and the bench comes in. Chemistry boosts every rating.
+// rebound and assist. Players tire on the court and the bench comes in. Chemistry boosts every rating; a starter
+// out of position loses what his OVR there falls short of his best (× SIM.fitWeight) from every rating.
 // simRest finishes a game from any state, so the live game can hand over part-way.
 import { chemistry } from "../chemistry.ts";
-import type { Lineup } from "../lineup.ts";
+import { slotOvr, type Lineup } from "../lineup.ts";
 import { ATTR_MAX, SIM } from "../ratingConfig.ts";
 import { makeRng, type Rng } from "../rng.ts";
 import { newLine, score, type Line, type TeamBox } from "../stats.ts";
@@ -44,7 +45,8 @@ function makeTeam(l: Lineup, dex: Dex): SimTeam {
   const { boosts } = chemistry(l, dex);
   const players = l.ids.map((id, slot) => {
     const p = dex.get(id!)!;
-    const a = Object.fromEntries(ATTRIBUTES.map((k) => [k, Math.min(ATTR_MAX, p.attrs[k] + boosts[slot])])) as Attributes;
+    const fit = (slotOvr(slot, p) - p.ovr[p.best]) * SIM.fitWeight; // 0 at his best spot and on the bench
+    const a = Object.fromEntries(ATTRIBUTES.map((k) => [k, Math.max(0, Math.min(ATTR_MAX, p.attrs[k] + boosts[slot] + fit))])) as Attributes;
     return { id: p.id, name: p.name, a, energy: 100 };
   });
   return { name: l.name, players, onCourt: POSITIONS.map((_, i) => i), box: { name: l.name, lines: l.ids.map((id, slot) => newLine(id!, slot)), periods: [] } };

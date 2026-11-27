@@ -15,6 +15,8 @@ import { backBlip, coin, moveBlip, selectBlip } from "../sound.ts";
 import { PALETTE } from "../theme/palette.ts";
 import { useMusic } from "../bgm.ts";
 import { usePortraitTouch } from "../touch.ts";
+import { hasUnseenNews } from "../whatsNew.ts";
+
 
 /** The title screen, arcade attract-mode style: a CPU game's big plays roll in the background through the replay
  *  cameras (LiveView's `attract` mode), the logo sits on top, and INSERT COIN blinks until you press a key; then the
@@ -91,11 +93,14 @@ export function Title() {
     setTimeout(() => setReady(true), reducedMotion() ? 0 : SETTLE_MS);
   }
 
-  // the menu: two big buttons (PLAY, DRAFT) side by side, two small ones (ABOUT, POKéDEX) stacked under them
+  const menuOpen = stage === "menu" && ready;
+  const showNewTag = menuOpen && hasUnseenNews(); // WHAT'S NEW lives in ABOUT: the tag says there's news there
+
+  // Desktop has two rows of buttons; portrait stacks them in the same order.
   const items = [
     { label: "PLAY", onSelect: () => navigate("/play", { state: { starters: five.map((p) => p.id) } }) },
     { label: "DRAFT", onSelect: () => navigate("/draft") },
-    { label: "ABOUT", onSelect: () => navigate("/about") },
+    { label: "ABOUT", onSelect: () => navigate("/about"), isNew: showNewTag },
     { label: "POKéDEX", onSelect: () => navigate("/dex") },
   ];
   const [pick, setPick] = useState(0);
@@ -103,7 +108,7 @@ export function Title() {
 
   // arrows move (left/right between the big two, down to the small ones), Enter/Space picks, Esc steps back
   useEffect(() => {
-    if (stage !== "menu" || !ready) return;
+    if (!menuOpen) return;
     const MOVES: Record<string, number[]> = portrait
       ? { ArrowDown: [1, 2, 3, 3], ArrowUp: [0, 0, 1, 2] } // portrait: one column
       : { ArrowLeft: [1, 0, 2, 3], ArrowRight: [1, 0, 2, 3], ArrowDown: [2, 2, 3, 3], ArrowUp: [0, 1, 0, 2] };
@@ -125,13 +130,17 @@ export function Title() {
   const button = (i: number, cls: string, size: number) => (
     <button
       key={i}
-      className={`pop absolute flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
+      className={`pop ${portrait ? "relative" : "absolute"} flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
       style={{ fontSize: size, boxShadow: `4px 4px 0 ${PALETTE.black}` }}
       onMouseEnter={() => pick !== i && (moveBlip(), setPick(i))}
+      onFocus={() => setPick(i)}
       onClick={() => choose(i)}
     >
       {pick === i && <span className="blink"><Arrow /></span>}
       {items[i].label}
+      {items[i].isNew && (
+        <span className="blink absolute -right-1 -top-3 bg-gold px-1 py-[2px] text-[8px] leading-none text-black will-change-[opacity]">NEW</span>
+      )}
     </button>
   );
 
@@ -169,29 +178,18 @@ export function Title() {
   );
 
   // portrait, coin in: a menu filling the whole screen, the big plays playing behind it cropped to fill
-  if (portrait && stage === "menu" && ready) {
-    const stacked = (i: number, cls: string, size: number) => (
-      <button
-        key={i}
-        className={`pop flex items-center justify-center gap-[10px] border-4 bg-black/80 font-head ${pick === i ? "border-gold text-gold" : "border-white text-white"} ${cls}`}
-        style={{ fontSize: size, boxShadow: `4px 4px 0 ${PALETTE.black}` }}
-        onClick={() => (setPick(i), choose(i))}
-      >
-        {pick === i && <span className="blink"><Arrow /></span>}
-        {items[i].label}
-      </button>
-    );
+  if (portrait && menuOpen) {
     return (
       <div className="screen-slam relative h-full w-full overflow-hidden bg-black">
         <div ref={setHost} className="absolute inset-0 [&_canvas]:!h-full [&_canvas]:!w-full [&_canvas]:object-cover" />
         <div className="pointer-events-none absolute inset-0 bg-black/40" />
         {/* (a phone's narrower than the logo: a bit smaller) */}
         <div className="absolute inset-x-0 top-0 h-[150px] origin-top scale-[0.8]">{logo}</div>
-        <div className="absolute inset-x-0 top-[38%] flex flex-col items-center gap-4 px-6">
-          {stacked(0, "h-[84px] w-full max-w-[340px]", 28)}
-          {stacked(1, "h-[84px] w-full max-w-[340px]", 28)}
-          {stacked(2, "mt-2 h-[44px] w-[70%] max-w-[240px]", 12)}
-          {stacked(3, "h-[44px] w-[70%] max-w-[240px]", 12)}
+        <div className="absolute inset-x-0 bottom-[30px] top-[112px] flex flex-col items-center justify-center gap-3 px-6">
+          {button(0, "h-[84px] w-full max-w-[340px]", 28)}
+          {button(1, "h-[84px] w-full max-w-[340px]", 28)}
+          {button(2, "mt-2 h-[44px] w-[70%] max-w-[240px]", 12)}
+          {button(3, "h-[44px] w-[70%] max-w-[240px]", 12)}
         </div>
         {notice}
       </div>

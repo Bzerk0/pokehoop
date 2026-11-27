@@ -1,7 +1,8 @@
 // HOW TO PLAY (PLAN.md Phase 9: "a new player learns the game in under 2 min"): a 3v3 practice game in short steps.
 // Each step sets up the court, says what to press, gives a hint if you're stuck, and moves on when you've done it.
-// The CPU stands still except in the defence step.
-import { dist, giveBall, hoopOf, spotOf, type Game, type GameEvent } from "../core/live/game.ts";
+// The CPU stands still except in the steal step, where their ball handler just walks it up slowly.
+import { dist, giveBall, hoopOf, NO_INPUT, spotOf, type Game, type GameEvent, type Input, type Player } from "../core/live/game.ts";
+import { LIVE } from "../core/ratingConfig.ts";
 
 /** What a step can check: how long it's been going, how far you've run and sprinted, and what just happened. */
 type Check = { t: number; sprint: number; moved: number; events: GameEvent[]; g: Game };
@@ -9,7 +10,7 @@ type Step = {
   title: string;
   how: string; // what to press
   hint: string; // shown if it's taking a while
-  cpu?: boolean; // the CPU plays (the defence step)
+  cpu?: boolean | "easy"; // the CPU plays; "easy": only their ball handler moves, at a slow walk (the steal step)
   setup?: (g: Game) => void;
   done: (c: Check) => boolean;
 };
@@ -25,6 +26,13 @@ function ready(g: Game, d: number) {
   }
   Object.assign(g.players[0], { x: hoop.x, y: hoop.y - d });
   giveBall(g, 0);
+}
+
+/** For a crossover: the ball and one of theirs standing right in front of you, between you and the hoop. */
+function guarded(g: Game) {
+  ready(g, 9);
+  const you = g.players[0], man = g.players.find((p) => p.side === 1)!;
+  Object.assign(man, { x: you.x, y: you.y + 1.5 });
 }
 
 /** Their point guard brings it up; you defend. */
@@ -55,6 +63,13 @@ export const STEPS: Step[] = [
     done: (c) => released(c, "DUNK", "LAYUP"),
   },
   {
+    title: "CROSSOVER",
+    how: "WITH THE BALL, DOUBLE-TAP {turbo} TO CROSS OVER",
+    hint: "LEAN LEFT OR RIGHT AS YOU TAP TO BLOW PAST YOUR MAN",
+    setup: guarded,
+    done: (c) => c.g.players[c.g.control].act === "cross",
+  },
+  {
     title: "PASS",
     how: "{pass} PASSES TO WHO YOU FACE, 1-3 TO A TEAMMATE",
     hint: "THE GOLD NUMBERS ARE YOUR TEAMMATES",
@@ -69,12 +84,15 @@ export const STEPS: Step[] = [
     done: (c) => c.events.some((e) => e.kind === "call" && e.side === 0),
   },
   {
-    title: "DEFEND",
-    how: "DOUBLE-TAP {turbo} NEAR THE BALL TO STEAL, {shoot} JUMPS TO BLOCK",
+    title: "STEAL",
+    how: "RUN TO THE BALL, DOUBLE-TAP {turbo} TO STEAL IT",
     hint: "{pass} SWITCHES TO WHOEVER IS NEAREST THE BALL",
-    cpu: true,
-    setup: theirBall,
-    done: (c) => (c.g.poss === 0 && c.t > 0.5) || c.t > 30, // get it back (or just survive 30 seconds)
+    cpu: "easy",
+    setup: (g) => {
+      theirBall(g);
+      g.stealAid = LIVE.tutorStealAid; // a new player should get one in a try or two
+    },
+    done: (c) => c.events.some((e) => e.kind === "steal" && e.side === 0), // only a steal counts (not a rebound)
   },
 ];
 
@@ -106,7 +124,18 @@ export class Tutorial {
     return this.wait > 0;
   }
 
+  /** The CPU's input in an "easy" step: their ball handler walks it up slowly (no moves), everyone else stands. */
+  cpuInput(g: Game, p: Player): Input {
+    if (g.ball.holder !== p.i || g.ball.flight) return NO_INPUT;
+    const hoop = hoopOf(p.side), d = dist(p, hoop);
+    return d > 6 ? { ...NO_INPUT, x: ((hoop.x - p.x) / d) * 0.35, y: ((hoop.y - p.y) / d) * 0.35 } : NO_INPUT;
+  }
+  get easy() {
+    return this.step?.cpu === "easy";
+  }
+
   private begin() {
+    this.g.stealAid = 0;
     this.step?.setup?.(this.g);
     const you = this.g.players[this.g.control];
     this.t = this.sprint = this.moved = 0;
@@ -134,8 +163,9 @@ export class Tutorial {
       g.dead = 0;
       (this.step.setup ?? ((g2: Game) => ready(g2, 8)))(g);
     }
-    // the defence step: they scored, so you'd inbound it (and get the ball "back"): that's a fail, try again
-    if (this.step.cpu && (events.some((e) => e.kind === "make" && e.side === 1) || (g.dead > 0 && g.next === 0))) {
+    // the steal step: they scored (you'd inbound it), or you got it back some other way (a rebound): try again
+    const stole = events.some((e) => e.kind === "steal" && e.side === 0);
+    if (this.step.cpu && !stole && (events.some((e) => e.kind === "make" && e.side === 1) || (g.dead > 0 && g.next === 0) || g.poss === 0)) {
       g.dead = 0;
       this.begin();
       return null;

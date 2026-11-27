@@ -6,7 +6,8 @@ import { HomeLogo } from "../components/HomeLogo.tsx";
 import { useMusic } from "../bgm.ts";
 import { CREDITS } from "../credits.ts";
 import { GAME_NAME } from "../name.ts";
-import { backBlip } from "../sound.ts";
+import { backBlip, selectBlip } from "../sound.ts";
+import { hasUnseenNews } from "../whatsNew.ts";
 
 /** What the game is, who made what in it (credits.ts) and the fan disclaimer. */
 export function About() {
@@ -24,18 +25,25 @@ export function About() {
   const heading = "mb-3 font-head text-[12px] text-gold";
   return (
     <div className="mx-auto max-w-[800px] p-4">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="flex items-center gap-3 font-head text-[20px] text-gold" style={{ textShadow: "2px 2px 0 var(--color-red)" }}>
           <HomeLogo />
           ABOUT
         </h1>
-        <button className="px-btn" onClick={back}><Arrow left /> BACK (ESC)</button>
+        <span className="flex flex-wrap items-center gap-2">
+          {/* in the header with BACK: a way to another page, not part of the page's content */}
+          <button className="px-btn relative" onClick={() => (selectBlip(), navigate("/whats-new"))}>
+            WHAT'S NEW <Arrow />
+            {hasUnseenNews() && <span className="blink absolute -right-2 -top-3 bg-gold px-1 py-[2px] font-head text-[8px] leading-none text-black">NEW</span>}
+          </button>
+          <button className="px-btn" onClick={back}><Arrow left /> BACK (ESC)</button>
+        </span>
       </div>
 
       <div className="flex flex-col gap-4 text-[20px] leading-[22px] text-cloud">
         <section className="px-box p-4">
           <h2 className={heading}>{GAME_NAME}</h2>
-          <p>A free fan-made arcade hoops game where the players are Pokémon. Draft a team, then play it live or sim the game. Made by Hudson Bjerkness.</p>
+          <p>Made by Hudson Bjerkness.</p>
           <p className="mt-2">No ads, no payments, no accounts. Your teams are saved in this browser only.</p>
         </section>
 

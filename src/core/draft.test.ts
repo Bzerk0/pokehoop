@@ -12,6 +12,7 @@ import {
   pickOffer,
   reroll,
   startDraft,
+  swapSpots,
   tierOf,
   toLineup,
   type Draft,
@@ -32,10 +33,13 @@ function run(seed: number, choose: (d: Draft) => Choice, mode: "classic" | "unli
     const budget = budgetFor(toLineup(d), openSlots(d)[0], dex);
     expect(d.offers).toHaveLength(ARCADE.reels);
     expect(new Set(d.offers.map((o) => o.id)).size).toBe(ARCADE.reels);
+    expect(d.offers.filter((o) => o.pricey).length).toBeLessThanOrEqual(1);
+    expect(d.offers.some((o) => !o.pricey)).toBe(true);
     for (const o of d.offers) {
       const p = dex.get(o.id)!;
       expect(isEligible(p, mode)).toBe(true);
-      expect(salary(p)).toBeLessThanOrEqual(budget);
+      if (o.pricey) expect(salary(p)).toBeGreaterThan(budget); // shown locked, can't be taken
+      else expect(salary(p)).toBeLessThanOrEqual(budget);
       expect(d.ids).not.toContain(o.id);
       expect(o.tier).toBe(tierOf(p));
     }
@@ -43,13 +47,14 @@ function run(seed: number, choose: (d: Draft) => Choice, mode: "classic" | "unli
   }
   return d;
 }
-const randomly = (rng: ReturnType<typeof makeRng>) => (d: Draft): Choice => [rng.pick(d.offers).id, rng.pick(openSlots(d))];
+const randomly = (rng: ReturnType<typeof makeRng>) => (d: Draft): Choice => [rng.pick(d.offers.filter((o) => !o.pricey)).id, rng.pick(openSlots(d))];
 /** Spend sensibly (nobody over 1.6× an even share of what's left) and put each pick where it rates highest. */
 const sensibly = (d: Draft): Choice => {
   const fair = (1.6 * (SALARY_CAP - payroll(toLineup(d), dex))) / (SLOTS.length - d.round);
-  const ok = d.offers.filter((o) => salary(dex.get(o.id)!) <= fair);
+  const can = d.offers.filter((o) => !o.pricey);
+  const ok = can.filter((o) => salary(dex.get(o.id)!) <= fair);
   const rate = (id: number) => slotOvr(bestSpot(d, dex.get(id)!), dex.get(id)!);
-  const id = [...(ok.length ? ok : d.offers)].sort((a, b) => rate(b.id) - rate(a.id))[0].id;
+  const id = [...(ok.length ? ok : can)].sort((a, b) => rate(b.id) - rate(a.id))[0].id;
   return [id, bestSpot(d, dex.get(id)!)];
 };
 
@@ -90,6 +95,37 @@ describe("draft", () => {
     const notOffered = pool.find((p) => !d.offers.some((o) => o.id === p.id))!;
     expect(pickOffer(d, pool, dex, notOffered.id, 0)).toBe(d);
     expect(b).not.toBe(a);
+  });
+
+  it("a locked over-budget STAR sometimes shows up, and can't be taken", () => {
+    let seen = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const pickRandomly = randomly(makeRng(seed));
+      let d = startDraft(pool, dex, "classic", seed);
+      while (!isOver(d)) {
+        const o = d.offers.find((x) => x.pricey);
+        if (o) {
+          seen++;
+          expect(o.tier).toBe("STAR");
+          expect(pickOffer(d, pool, dex, o.id, openSlots(d)[0])).toBe(d);
+        }
+        d = pickOffer(d, pool, dex, ...pickRandomly(d));
+      }
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it("swapping spots moves a Pokémon to another spot or an open one, and never changes the payroll", () => {
+    let d = startDraft(pool, dex, "classic", 5);
+    d = pickOffer(d, pool, dex, d.offers[0].id, 2);
+    d = pickOffer(d, pool, dex, d.offers[0].id, 4);
+    const [a, b] = [d.ids[2], d.ids[4]];
+    const s = swapSpots(d, 2, 4);
+    expect([s.ids[2], s.ids[4]]).toEqual([b, a]);
+    const m = swapSpots(d, 2, 0); // onto an open spot
+    expect([m.ids[0], m.ids[2]]).toEqual([a, null]);
+    expect(payroll(toLineup(m), dex)).toBe(payroll(toLineup(d), dex));
+    expect(checkDraft(m, dex)).not.toBeNull();
   });
 
   it("bestSpot puts a Pokémon where it rates highest, and prefers starting to the bench on a tie", () => {

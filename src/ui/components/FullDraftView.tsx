@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { budgetOf, isDone, onClock, standings, startFull, totalPicks, YOU, youPick } from "../../core/fullDraft.ts";
+import { budgetOf, isDone, onClock, standings, startFull, swapYours, totalPicks, YOU, youPick } from "../../core/fullDraft.ts";
 import { chemistry } from "../../core/chemistry.ts";
 import { emptyLineup, salary, SLOTS, slotOvr, STARTERS, type Mode } from "../../core/lineup.ts";
 import { ChemistryList } from "./ChemistryList.tsx";
@@ -87,6 +87,7 @@ export function FullDraftView({ pool, dex, mode, seed, onDone }: {
       canPlace={(slot) => roster[slot] == null}
       bestSlot={bestSlot}
       onPlace={(id, slot) => setFd(youPick(fd, dex, id, slot))}
+      onSwap={(a, b) => setFd(swapYours(fd, a, b))}
     >
       <section className="px-box p-3">
         <h2 className="m-0 mb-1 font-head text-[12px] text-gold">YOUR CHEMISTRY</h2>

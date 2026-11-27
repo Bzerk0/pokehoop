@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { allowedIn, cpuTeam } from "../cpuTeam.ts";
+import { allowedIn, cpuTeam, suggestedDifficulty } from "../cpuTeam.ts";
 import { dexOf, problems, SLOTS, teamOvr, teamRating } from "../lineup.ts";
 import { DIFFICULTIES } from "../ratingConfig.ts";
 import { rateAll } from "../ratings.ts";
@@ -24,11 +24,14 @@ describe("CPU teams (PLAN.md §8)", () => {
       expect(ovr, `${name} seed ${seed}`).toBeLessThanOrEqual(d.max + 3);
     }
   });
-  it("Champion is Unlimited only, and Classic CPU teams have no legendaries", () => {
-    expect(allowedIn("CHAMPION", "classic")).toBe(false);
+  it("every difficulty can be picked in Classic, and Classic CPU teams have no legendaries", () => {
+    expect(allowedIn("CHAMPION", "classic")).toBe(true);
     expect(allowedIn("ALL-STAR", "classic")).toBe(true);
     const t = cpuTeam(pool, "ALL-STAR", "classic", 4);
     expect(t.ids.every((id) => !dex.get(id!)!.isLegendary && !dex.get(id!)!.isMythical)).toBe(true);
+  });
+  it("the suggested difficulty follows your team's OVR", () => {
+    expect([50, 60, 70, 80, 90, 99].map(suggestedDifficulty)).toEqual(["ROOKIE", "ROOKIE", "PRO", "ALL-STAR", "CHAMPION", "CHAMPION"]);
   });
   it("same seed, same team", () => expect(cpuTeam(pool, "PRO", "classic", 9)).toEqual(cpuTeam(pool, "PRO", "classic", 9)));
 });

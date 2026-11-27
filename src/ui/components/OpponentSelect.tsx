@@ -17,12 +17,13 @@ const KIND = { 1: "SINGLE OPPONENT", 3: "OPPOSING TRIO", 5: "OPPOSING TEAM" } as
  *  the size of the game) is already chosen at the top, with the difficulty and NEW OPPONENT; or pick your own
  *  from the Pokédex underneath (the ready-made ones fill any spots you leave). `picks` are your own choices;
  *  `onStart` gets the final players, in court order. */
-export function OpponentSelect({ size, dex, cpu, level, yourMode, picks, setPicks, onDifficulty, onNew, onStart, onSim, onBack }: {
+export function OpponentSelect({ size, dex, cpu, level, suggested, yourMode, picks, setPicks, onDifficulty, onNew, onStart, onSim, onBack }: {
   size: 1 | 3 | 5;
   dex: Map<number, RatedPokemon>;
   cpu: Lineup; // the ready-made opponent's whole team (its bench rides along in a team game)
   level: Difficulty;
-  yourMode: Mode; // Champion needs an Unlimited team
+  suggested: Difficulty; // the fair fight for your team's rating
+  yourMode: Mode;
   picks: number[];
   setPicks: (ids: number[]) => void;
   onDifficulty: (d: Difficulty) => void;
@@ -101,13 +102,14 @@ export function OpponentSelect({ size, dex, cpu, level, yourMode, picks, setPick
               className="px-btn"
               aria-pressed={level === d.name}
               disabled={!allowedIn(d.name, yourMode)}
-              title={!allowedIn(d.name, yourMode) ? "Champion needs an Unlimited team" : `${d.min}–${d.max} OVR`}
+              title={`${d.min}–${d.max} OVR${d.name === suggested ? " · suggested for your team" : ""}`}
               onClick={() => (selectBlip(), onDifficulty(d.name))}
             >
-              {d.name}
+              {d.name}{d.name === suggested ? " *" : ""}
             </button>
           ))}
         </span>
+        <span className="text-[18px] text-steel">* FAIR FIGHT FOR YOUR TEAM</span>
         <button className="px-btn" onClick={() => (selectBlip(), onNew())}>NEW OPPONENT</button>
         <span className="ml-auto flex flex-wrap items-center gap-2">
           <button className="px-btn" onClick={() => (backBlip(), onBack())}><Arrow left /> BACK<span className="hidden sm:inline"> (ESC)</span></button>

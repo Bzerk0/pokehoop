@@ -4,6 +4,7 @@ import type { RatedPokemon } from "../../core/types.ts";
 import { backBlip, blip, selectBlip, slotSpin } from "../sound.ts";
 import { PALETTE } from "../theme/palette.ts";
 import { Arrow } from "./Arrow.tsx";
+import { PlayerModal, StatsButton } from "./Modal.tsx";
 import { Sprite } from "./PlayerCard.tsx";
 import { ARCH, corners, GOLD, Lights, Shine, SpinReel } from "./slotParts.tsx";
 import { TypeChip } from "./PlayerCard.tsx";
@@ -19,6 +20,7 @@ export function RandomPicker({ size, pool, onUse, onClose }: {
   onUse: (ids: number[]) => void;
   onClose: () => void;
 }) {
+  const [stats, setStats] = useState<RatedPokemon | null>(null);
   const [spin, setSpin] = useState(0); // which spin this is (a new result each time)
   const [stopped, setStopped] = useState(0);
   const done = stopped >= size;
@@ -79,7 +81,7 @@ export function RandomPicker({ size, pool, onUse, onClose }: {
                 <div className="my-[6px] grid gap-[6px]" style={{ gridTemplateColumns: `repeat(${result.length}, minmax(0, 1fr))` }}>
                   {result.map((p, i) =>
                     i < stopped ? (
-                      <div key={`${spin}-${p.id}`} className="deal flex h-[284px] min-w-0 flex-col items-center justify-between border-4 border-amber bg-cream px-1 py-2 text-black" style={{ animationDelay: "0ms" }}>
+                      <div key={`${spin}-${p.id}`} className="deal relative flex h-[284px] min-w-0 flex-col items-center justify-between border-4 border-amber bg-cream px-1 py-2 text-black" style={{ animationDelay: "0ms" }}>
                         <span className="font-head text-[10px] leading-[14px]">P{i + 1}</span>
                         <span className="flex h-[120px] items-end justify-center overflow-hidden">
                           <Sprite p={p} scale={p.spriteH > 60 ? 1 : 2} eager className="max-w-none" />
@@ -87,6 +89,7 @@ export function RandomPicker({ size, pool, onUse, onClose }: {
                         <span className="w-full truncate text-center text-[20px] leading-[20px]">{p.name}</span>
                         <span className="flex flex-wrap justify-center gap-1">{p.types.map((t) => <TypeChip key={t} type={t} />)}</span>
                         <span className="font-head text-[16px] leading-[20px] text-maroon">{p.ovr[p.best]} {p.best}</span>
+                        <StatsButton p={p} onOpen={() => setStats(p)} className="absolute right-[2px] top-[2px]" />
                       </div>
                     ) : (
                       <SpinReel key={`spin${spin}-${i}`} faces={faces[i]} />
@@ -107,6 +110,7 @@ export function RandomPicker({ size, pool, onUse, onClose }: {
           </div>
         </div>
       </div>
+      {stats && <PlayerModal p={stats} onClose={() => setStats(null)} />}
     </div>
   );
 }

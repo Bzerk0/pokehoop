@@ -17,16 +17,28 @@ const away = { name: "CPU", ids: ids(["alakazam", "scizor", "infernape", "tyrani
 const DT = 1 / 60;
 
 describe("HOW TO PLAY", () => {
-  it("in DEFEND, them scoring is a try-again, not the end of the lesson", () => {
+  it("in STEAL, a rebound (getting it back without a steal) is a try-again, not the end of the lesson", () => {
     const g = lineupGame(home, away, dex, 3, 1, true);
     const tu = new Tutorial(g);
-    while (tu.step?.title !== "DEFEND") (tu as unknown as { i: number }).i++;
+    while (tu.step?.title !== "STEAL") (tu as unknown as { i: number }).i++;
+    tu.step.setup?.(g);
+    giveBall(g, g.players.find((p) => p.side === 0)!.i); // your rebound
+    expect(tu.update(DT, [{ kind: "rebound", side: 0, text: "REBOUND" }])).toBeNull();
+    expect(tu.step?.title).toBe("STEAL");
+    expect(g.players[g.ball.holder!].side).toBe(1); // their ball again
+    expect(g.stealAid).toBeGreaterThan(0);
+  });
+
+  it("in STEAL, them scoring is a try-again, not the end of the lesson", () => {
+    const g = lineupGame(home, away, dex, 3, 1, true);
+    const tu = new Tutorial(g);
+    while (tu.step?.title !== "STEAL") (tu as unknown as { i: number }).i++;
     tu.step.setup?.(g);
     g.dead = 0.5; // they scored: you'd inbound it next
     g.next = 0;
     expect(tu.update(DT, [{ kind: "make", side: 1, text: "SCORE!" }])).toBeNull();
     expect(tu.finished).toBe(false);
-    expect(tu.step?.title).toBe("DEFEND");
+    expect(tu.step?.title).toBe("STEAL");
     expect(g.players[g.ball.holder!].side).toBe(1); // their ball again, for another go
   });
 
@@ -69,11 +81,17 @@ describe("HOW TO PLAY", () => {
         if (title === "DUNK") Object.assign(inp, { x: (hoop.x - you.x) / d, y: (hoop.y - you.y) / d, turbo: true, shoot: d < LIVE.dunkRange - 0.4 });
         if (title === "PASS") inp.steal = true; // J
         if (title === "CALL A PLAY" && t % 1 < DT) callPlay(g, 0, "MOTION"); // what Q → ENTER does
-        if (title === "DEFEND") inp.cross = Math.floor(t * 4) % 2 === 0; // swipe at it (a double tap of sprint steals)
+        if (title === "CROSSOVER") Object.assign(inp, { y: 1, x: 0.6, cross: true }); // a double tap of sprint, leaning
+        if (title === "STEAL") {
+          // run at the ball and swipe at it (a double tap of sprint steals)
+          const h = g.ball.holder != null ? g.players[g.ball.holder] : null, hd = h ? dist(you, h) || 1 : 1;
+          if (h && h.side === 1) Object.assign(inp, { x: (h.x - you.x) / hd, y: (h.y - you.y) / hd, cross: hd < 1.3 && Math.floor(t * 4) % 2 === 0 });
+        }
       }
       const between = g.events.slice(before); // a menu call happens between steps, as in LiveView
       const cpuIdle = !tu.cpuPlays;
-      step(g, g.players.map((p) => (p.i === g.control ? inp : cpuIdle && p.side === 1 ? NO_INPUT : ai[p.i](g, DT))), DT);
+      const easy = tu.cpuPlays && tu.easy; // as LiveView: their handler walks it up, the rest stand
+      step(g, g.players.map((p) => (p.i === g.control ? inp : cpuIdle && p.side === 1 ? NO_INPUT : easy && p.side === 1 ? tu.cpuInput(g, p) : ai[p.i](g, DT))), DT);
       result = tu.update(DT, [...between, ...g.events]) ?? result;
       t += DT;
     }

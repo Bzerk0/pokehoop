@@ -109,6 +109,7 @@ canvas {
     cursor: pointer;
   }
   .px-btn:hover,
+  .px-btn:focus-visible, /* arrow keys (arrowNav.ts) light a button like the mouse does */
   .px-btn[aria-pressed="true"] {
     background: var(--color-gold);
     color: var(--color-black);

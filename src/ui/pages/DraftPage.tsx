@@ -6,11 +6,11 @@ import {
   checkDraft,
   chemPreview,
   dailySeed,
-  draftGrade,
   isOver,
   openSlots,
   pickCall,
   pickOffer,
+  swapSpots,
   reroll,
   startDraft,
   toLineup,
@@ -19,9 +19,10 @@ import {
   type Tier,
 } from "../../core/draft.ts";
 import { boostedOvr, budgetFor, dexOf, NAME_MAX, payroll, salary, SLOTS, slotOvr, STARTERS, teamOvr, teamRating, type Lineup, type Mode } from "../../core/lineup.ts";
-import { ARCADE, DRAFT_REROLLS } from "../../core/ratingConfig.ts";
+import { ARCADE, DRAFT_REROLLS, SEASON } from "../../core/ratingConfig.ts";
+import { seasonGrade, seasonRecord } from "../../core/season.ts";
 import type { RatedPokemon } from "../../core/types.ts";
-import { clearRun, loadRun, saveDraft, saveRun, saveTeam } from "../../storage.ts";
+import { clearRun, loadBest, loadRun, recordBest, saveDraft, saveRun, saveTeam, type BestDraft } from "../../storage.ts";
 import { HomeLogo } from "../components/HomeLogo.tsx";
 import { ChemistryList } from "../components/ChemistryList.tsx";
 import { LineupCard, teamColor } from "../components/LineupCard.tsx";
@@ -60,6 +61,14 @@ type Run = { draft: Draft; name: string; colors: [number, number] };
 const dateLabel = (seed: number) => `${String(seed).slice(0, 4)}-${String(seed).slice(4, 6)}-${String(seed).slice(6, 8)}`;
 
 /** One offer: a card framed in its tier's colour, rated at its best position, with the chemistry it would bring. */
+/** A labelled pixel rule between the draft menu's sections. */
+const Divider = ({ label }: { label: string }) => (
+  <div className="mb-3 mt-6 flex items-center gap-3 first:mt-0">
+    <span className="shrink-0 font-head text-[12px] text-cloud">{label}</span>
+    <span className="h-[4px] flex-1 bg-slate" />
+  </div>
+);
+
 function OfferCard({ offer, p, index, state, chem, spot, onPick, onStats }: {
   offer: Offer; p: RatedPokemon; index: number; state: "open" | "selected" | "picked" | "passed";
   chem: { links: Link[]; boost: number }; spot?: number; onPick: () => void; onStats: () => void;
@@ -76,13 +85,13 @@ function OfferCard({ offer, p, index, state, chem, spot, onPick, onStats }: {
         className={`offer flex w-full cursor-pointer flex-col border-4 bg-night text-left disabled:cursor-default ${state === "passed" ? "grayscale" : ""}`}
         style={{ borderColor: PALETTE[lit ? "white" : frame], boxShadow: `2px 2px 0 ${PALETTE.black}` }}
         onClick={onPick}
-        disabled={state === "picked" || state === "passed"}
+        disabled={state === "picked" || state === "passed" || offer.pricey}
         aria-pressed={state === "selected"}
-        aria-label={`${offer.tier}: ${p.name}, ${ovr} OVR ${at.toLowerCase()}, $${salary(p)}M${chem.boost ? `, +${chem.boost} chemistry` : ""}. Press ${index + 1}.`}
+        aria-label={`${offer.tier}: ${p.name}, ${ovr} OVR ${at.toLowerCase()}, $${salary(p)}M${offer.pricey ? ", over your budget" : `${chem.boost ? `, +${chem.boost} chemistry` : ""}. Press ${index + 1}.`}`}
       >
         <span className="flex items-center justify-between px-2 py-[2px] pr-[36px] text-[20px]" style={{ background: PALETTE[frame], color: PALETTE[inkOn(frame)] }}>
           <span>{offer.tier}</span>
-          <span>{state === "selected" ? "SELECTED" : `[${index + 1}]`}</span>
+          <span>{offer.pricey ? "LOCKED" : state === "selected" ? "SELECTED" : `[${index + 1}]`}</span>
         </span>
         <span className="flex h-[120px] items-end justify-center overflow-hidden bg-navy pb-1">
           <Sprite p={p} scale={p.spriteH > 60 ? 1 : 2} eager className="max-w-none" />
@@ -98,11 +107,11 @@ function OfferCard({ offer, p, index, state, chem, spot, onPick, onStats }: {
               </span>
               <span className="text-[20px] text-cloud">{at}</span>
             </span>
-            <span className="text-[28px] leading-[28px] text-lime">${salary(p)}M</span>
+            <span className={`text-[28px] leading-[28px] ${offer.pricey ? "text-red" : "text-lime"}`}>${salary(p)}M</span>
           </span>
           {/* always one line, even when empty, so a chemistry bonus never makes this card taller than the others */}
-          <span className="h-[18px] truncate text-[18px] leading-[18px] text-lime" title={chem.links.map((k) => k.name).join(", ")}>
-            {chem.boost > 0 ? `+${chem.boost} CHEM: ${chem.links.map((k) => k.name).join(", ")}` : ""}
+          <span className={`h-[18px] truncate text-[18px] leading-[18px] ${offer.pricey ? "text-red" : "text-lime"}`} title={chem.links.map((k) => k.name).join(", ")}>
+            {offer.pricey ? "OVER BUDGET: SAVE CAP ROOM" : chem.boost > 0 ? `+${chem.boost} CHEM: ${chem.links.map((k) => k.name).join(", ")}` : ""}
           </span>
         </span>
       </button>
@@ -113,9 +122,10 @@ function OfferCard({ offer, p, index, state, chem, spot, onPick, onStats }: {
 
 /** The roster: one tile per spot. While a pick is selected, every open spot is a button showing how it would rate
  *  there; its best spot blinks. */
-function Roster({ draft, dex, placing, onPlace, spot, onSpot, onStats }: {
+function Roster({ draft, dex, placing, onPlace, spot, onSpot, onStats, moving, onMove }: {
   draft: Draft; dex: Map<number, RatedPokemon>; placing?: RatedPokemon; onPlace?: (slot: number) => void;
   spot?: number | null; onSpot?: (slot: number) => void; onStats?: (p: RatedPokemon) => void;
+  moving?: number | null; onMove?: (slot: number) => void; // click two cards to swap their positions
 }) {
   const { boosts } = chemistry(toLineup(draft), dex);
   const best = placing && bestSpot(draft, placing);
@@ -141,6 +151,15 @@ function Roster({ draft, dex, placing, onPlace, spot, onSpot, onStats }: {
             </button>
           );
         }
+        if (!p && !placing && onMove && moving != null) {
+          return (
+            <button key={slot} className="offer flex cursor-pointer flex-col border-4 border-white bg-navy px-1 text-left hover:bg-slate" onClick={() => onMove(i)} aria-label={`Move to ${label}`}>
+              <span className="text-[20px] leading-[20px] text-gold">{label}</span>
+              <span className="flex h-[56px] items-center justify-center"><span className="text-[18px] leading-[18px] text-cloud">MOVE HERE</span></span>
+              <span className="text-center text-[18px] leading-[18px] text-white">▼ HERE</span>
+            </button>
+          );
+        }
         if (!p && !placing && onSpot) {
           const on = spot === i;
           return (
@@ -159,8 +178,10 @@ function Roster({ draft, dex, placing, onPlace, spot, onSpot, onStats }: {
             </button>
           );
         }
+        const swappable = !!p && !placing && !!onMove;
         return (
-          <div key={slot} className={`relative flex flex-col border-4 bg-night px-1 ${p ? "border-slate" : "border-night"}`}>
+          <div key={slot} className={`relative flex flex-col border-4 px-1 ${moving === i ? "border-gold bg-navy" : `bg-night ${p ? (swappable && moving != null ? "border-white" : "border-slate") : "border-night"}`} ${swappable ? "cursor-pointer" : ""}`}
+            {...(swappable ? { role: "button", tabIndex: 0, "aria-pressed": moving === i, "aria-label": `${moving == null ? "Move" : "Swap with"} ${p!.name}`, onClick: () => onMove!(i), onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") (e.preventDefault(), onMove!(i)); } } : {})}>
             <span className="flex justify-between text-[20px] leading-[20px]">
               <span className="text-cloud">{label}</span>
               {p && (
@@ -194,6 +215,7 @@ export function DraftPage() {
   const [toast, setToast] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
   const [spot, setSpot] = useState<number | null>(null); // a roster spot chosen before the Pokémon
+  const [moving, setMoving] = useState<number | null>(null); // a filled spot picked up, to swap with another
   const [quitting, setQuitting] = useState(false); // QUIT pressed once: waiting for the confirm
   const [stats, setStats] = useState<RatedPokemon | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -223,6 +245,20 @@ export function DraftPage() {
     setLoaded(true);
   }, [dex, loaded]);
   useEffect(() => void (loaded && (run ? saveRun(run) : clearRun())), [run, loaded]);
+  // a finished draft goes on the local BEST DRAFTS board (once: its key is the seed and the picks)
+  const [best, setBest] = useState<BestDraft[]>(loadBest);
+  // the verdict: the finished team's 82-game season (season.ts; ~0.1 s, so once per finished draft)
+  const finished = run && isOver(run.draft) ? run.draft : null;
+  const record = useMemo(() => (finished && dex && data ? seasonRecord(toLineup(finished), dex, data) : null), [finished, dex, data]);
+  useEffect(() => {
+    if (!loaded || !run || !dex || !record || !isOver(run.draft)) return;
+    const d = run.draft, lineup = toLineup(d), rating = teamRating(lineup, dex);
+    if (rating == null) return;
+    setBest(recordBest({
+      key: `${d.seed}-${d.mode}-${d.ids.join(",")}`, rating, wins: record.wins, grade: seasonGrade(record.wins), ovr: teamOvr(lineup, dex) ?? 0, name: run.name,
+      at: Date.now(), daily: d.daily, mode: d.mode, kind: d.deals === 0 ? "FULL" : "ARCADE",
+    }));
+  }, [run, loaded, dex, record]);
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 2500);
@@ -276,6 +312,7 @@ export function DraftPage() {
    *  the offer goes straight there. */
   const choose = (id: number) => {
     if (!run || call || isOver(run.draft) || revealed !== run.draft.deals) return;
+    if (run.draft.offers.find((o) => o.id === id)?.pricey) return; // over budget: shown, not takeable
     if (spot != null) return place(spot, id);
     moveBlip();
     setSelected((s) => (s === id ? null : id));
@@ -286,6 +323,15 @@ export function DraftPage() {
     if (!run || call || isOver(run.draft)) return;
     moveBlip();
     setSpot((s) => (s === slot ? null : slot));
+  };
+
+  /** Click two roster cards to swap them (a filled card, then another card or an open spot). */
+  const move = (slot: number) => {
+    if (!run || call || isOver(run.draft)) return;
+    moveBlip();
+    if (moving == null) return setMoving(slot);
+    if (moving !== slot) setRun({ ...run, draft: swapSpots(run.draft, moving, slot) });
+    setMoving(null);
   };
 
   const place = (slot: number, id = selected) => {
@@ -331,7 +377,8 @@ export function DraftPage() {
       if ((e.key === " " || e.key === "Enter") && run && !isOver(run.draft) && revealed !== run.draft.deals) return void (e.preventDefault(), pull());
       if (e.key === "Escape") {
         backBlip();
-        if (selected != null) setSelected(null);
+        if (moving != null) setMoving(null);
+        else if (selected != null) setSelected(null);
         else if (spot != null) setSpot(null);
         else if (drafting) setQuitting((q) => !q); // Esc asks first; a second Esc takes it back
         else navigate("/", { state: { menu: true } });
@@ -398,18 +445,21 @@ export function DraftPage() {
         {header}
         <section className="mb-4 border-4 border-black bg-red px-4 py-5" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
           <p className="m-0 font-head text-[24px] leading-[1.3] text-white sm:text-[32px]">DRAFT YOUR STARTING 5</p>
-          <p className="m-0 mt-1 text-[24px] text-white">ARCADE DRAFT: 8 pulls of the slot machine. FULL DRAFT: a real draft against 7 CPU teams.</p>
-          <p className="m-0 mt-2 flex flex-wrap items-center gap-2 text-[24px] text-white">
-            <span className="border-2 border-black bg-purple px-2 font-head text-[12px] leading-[24px] text-white">FRANCHISE</span>
-            Then take the team you draft into a franchise and run it season after season.
+          <p className="m-0 mt-1 text-[24px] text-white">
+            Take the team you draft into a{" "}
+            <span className="inline-block border-2 border-black bg-purple px-2 font-head text-[16px] leading-[26px] text-gold" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}`, textShadow: `2px 2px 0 ${PALETTE.black}` }}>FRANCHISE</span>{" "}
+            and run it season after season.
           </p>
         </section>
         {last && (() => {
-          const grade = draftGrade(teamRating(last, dex)!);
+          const wins = record?.wins ?? 0, grade = seasonGrade(wins);
           return (
-            <section className="px-box mb-4 flex flex-wrap items-center gap-4 p-3" aria-label="Last draft">
-              <div className="flex h-[72px] w-[72px] shrink-0 items-center justify-center border-4 border-black bg-black">
-                <span className="font-head text-[32px] text-gold">{grade}</span>
+            <>
+            <Divider label="YOUR LAST DRAFT" />
+            <section className="px-box flex flex-wrap items-center gap-4 p-3" aria-label="Last draft">
+              <div className="flex h-[72px] shrink-0 flex-col items-center justify-center border-4 border-black bg-black px-2">
+                <span className="font-head text-[20px] leading-[24px] text-gold">{wins}-{SEASON.games - wins}</span>
+                <span className="text-[18px] leading-[18px] text-cloud">GRADE {grade}</span>
               </div>
               <div className="min-w-[180px]">
                 <span className="block text-[20px] leading-[20px] text-cloud">LAST DRAFT</span>
@@ -434,8 +484,10 @@ export function DraftPage() {
                 <button className="px-btn" onClick={() => (selectBlip(), setShowResults(true))}>VIEW RESULTS</button>
               </div>
             </section>
+            </>
           );
         })()}
+        <Divider label="CHOOSE A DRAFT" />
         <div className="grid gap-4 md:grid-cols-3">
           <button
             className="offer flex cursor-pointer flex-col gap-2 border-4 border-gold bg-night p-4 text-left"
@@ -443,7 +495,7 @@ export function DraftPage() {
             onClick={() => begin(true)}
           >
             <span className="font-head text-[24px] text-gold">DAILY ARCADE</span>
-            <span className="text-[24px] leading-[1.2] text-white">Today's offers ({dateLabel(today)}), the same for everyone. Classic pool. Compare grades with friends.</span>
+            <span className="text-[24px] leading-[1.2] text-white">Today's offers ({dateLabel(today)}), the same for everyone. Classic pool. Compare records with friends.</span>
             <span className="mt-2 self-start border-2 border-black bg-gold px-3 py-1 text-[24px] text-black">START <Arrow /></span>
           </button>
           <div className="flex flex-col gap-2 border-4 border-sky bg-night p-4" style={{ boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
@@ -476,8 +528,28 @@ export function DraftPage() {
             </button>
           </div>
         </div>
+        {best.length > 0 && (
+          <>
+          <Divider label="YOUR BEST DRAFTS" />
+          <section className="px-box p-3" aria-label="Best drafts">
+            {best.map((b, i) => (
+              <div key={b.key} className="flex items-center gap-3 border-b-2 border-slate py-1 text-[20px] leading-[22px]">
+                <span className="w-[28px] shrink-0 text-cloud">#{i + 1}</span>
+                <span className="w-[76px] shrink-0 font-head text-[14px] text-gold">{b.wins != null ? `${b.wins}-${SEASON.games - b.wins}` : "--"}</span>
+                <span className="w-[28px] shrink-0 font-head text-[12px] text-white">{b.wins != null ? b.grade : ""}</span>
+                <span className="w-[72px] shrink-0 text-white">OVR {b.ovr}</span>
+                <span className="min-w-0 flex-1 truncate text-white">{b.name || "MY DRAFT"}</span>
+                {b.daily && <span className="shrink-0 border-2 border-black bg-gold px-1 font-head text-[10px] leading-[16px] text-black">DAILY</span>}
+                <span className="shrink-0 text-cloud">{b.kind} · {b.mode.toUpperCase()}</span>
+                <span className="hidden shrink-0 text-steel sm:inline">{new Date(b.at).toISOString().slice(0, 10)}</span>
+              </div>
+            ))}
+          </section>
+          </>
+        )}
         {/* the tier guide and reroll rule sit at the bottom of the window, out of the way of the start buttons */}
-        <div className="mt-auto pt-8">
+        <div className="mt-auto pt-4">
+        <Divider label="HOW THE ARCADE WORKS" />
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {(Object.keys(TIER_COLOR) as Tier[]).map((t) => (
             <div key={t} className="border-4 bg-night p-3" style={{ borderColor: PALETTE[TIER_COLOR[t]] }}>
@@ -488,7 +560,7 @@ export function DraftPage() {
             </div>
           ))}
         </section>
-        <p className="mt-3 text-[20px] text-cloud">ARCADE: {DRAFT_REROLLS} re-spins per draft (R). Better ranks are rarer, but most pulls land a STAR. Every Pokémon offered is one you can afford.</p>
+        <p className="mt-3 text-[20px] text-cloud">ARCADE: {DRAFT_REROLLS} re-spins per draft (R). Better ranks are rarer, but most pulls land a STAR. Now and then a STAR you can't afford yet shows up locked, priced in red: save cap room and it could be yours next time.</p>
         </div>
       </div>
     );
@@ -499,8 +571,8 @@ export function DraftPage() {
 
   // ── results ────────────────────────────────────────────────────────────
   if (isOver(draft)) {
-    const rating = teamRating(lineup, dex)!;
-    const grade = draftGrade(rating);
+    const wins = record?.wins ?? 0, losses = SEASON.games - wins;
+    const grade = seasonGrade(wins);
     const home = teamColor(run.colors[0]);
     const onSave = () => {
       const out = saveTeam(lineup);
@@ -508,7 +580,7 @@ export function DraftPage() {
     };
     const onCopy = async () => {
       const text = draft.daily
-        ? `${GAME_NAME} DAILY DRAFT ${dateLabel(draft.seed)}: GRADE ${grade}, OVR ${teamOvr(lineup, dex)} ${shareUrl(lineup)}`
+        ? `${GAME_NAME} DAILY DRAFT ${dateLabel(draft.seed)}: ${wins}-${losses} (GRADE ${grade}) ${shareUrl(lineup)}`
         : shareUrl(lineup);
       try {
         await navigator.clipboard.writeText(text);
@@ -535,16 +607,18 @@ export function DraftPage() {
       <div className="mx-auto max-w-[1200px] p-4">
         {header}
 
-        {/* the verdict: grade, what it means, the numbers behind it, and the next step */}
+        {/* the verdict: the 82-game season's record, what it means, the numbers behind it, and the next step */}
         <section className="mb-4 flex flex-wrap items-center gap-4 border-4 border-black p-4" style={{ background: PALETTE[home], boxShadow: `2px 2px 0 ${PALETTE.black}` }}>
-          <div className="pop flex h-[128px] w-[128px] shrink-0 items-center justify-center border-4 border-black bg-black">
-            <span className="font-head text-[64px] leading-[64px] text-gold">{grade}</span>
+          <div className="pop flex h-[128px] shrink-0 flex-col items-center justify-center gap-2 border-4 border-black bg-black px-4" aria-label={`Season record ${wins} wins, ${losses} losses`}>
+            <span className="text-[20px] leading-[20px] text-cloud">82-GAME SEASON</span>
+            <span className="font-head text-[48px] leading-[48px] text-gold">{wins}-{losses}</span>
+            <span className="text-[20px] leading-[20px] text-cloud">{wins === SEASON.games ? "PERFECT SEASON!" : `GRADE ${grade}`}</span>
           </div>
           <div className="flex min-w-[260px] flex-1 flex-col gap-3">
             <p className="m-0 font-head text-[24px] leading-[1.2]" style={{ color: ink }}>{GRADE_LINE[grade]}</p>
             <div className="flex flex-wrap gap-2">
               {stat("TEAM OVR", String(teamOvr(lineup, dex)))}
-              {stat("RATING", rating.toFixed(1))}
+              {stat("WIN %", (wins / SEASON.games).toFixed(3).replace(/^0/, ""))}
               {stat("PAYROLL", `$${payroll(lineup, dex)}M`)}
               {stat("CHEMISTRY", `+${boosts.reduce((a, b) => a + b, 0)}`)}
             </div>
@@ -627,9 +701,9 @@ export function DraftPage() {
                   <span className="sr-only">Team name</span>
                   <input className="px-input w-full" value={run.name} maxLength={NAME_MAX} onChange={(e) => setRun({ ...run, name: e.target.value })} />
                 </label>
-                <div className="flex gap-4">
+                <div className="flex flex-wrap gap-x-4 gap-y-2">
                   <ColorPick label="HOME" value={run.colors[0]} onChange={(i) => setRun({ ...run, colors: [i, run.colors[1]] })} />
-                  <ColorPick label="ACCENT" value={run.colors[1]} onChange={(i) => setRun({ ...run, colors: [run.colors[0], i] })} />
+                  <ColorPick label="ACCENT" value={run.colors[1]} onChange={(i) => setRun({ ...run, colors: [run.colors[0], i] })} onRandomize={(st) => setRun({ ...run, name: st.name, colors: st.colors })} />
                 </div>
                 <span className="mt-1 text-[24px] leading-[24px] text-gold">CHEMISTRY</span>
                 <ChemistryList lineup={lineup} dex={dex} />
@@ -814,8 +888,10 @@ export function DraftPage() {
         )}
       </div>
 
-      <h2 className="mb-1 mt-3 font-head text-[12px] text-cloud">YOUR ROSTER</h2>
-      <Roster draft={draft} dex={dex} placing={call ? undefined : placing} onPlace={(s) => place(s)} spot={spot} onSpot={call ? undefined : chooseSpot} onStats={setStats} />
+      <h2 className="mb-1 mt-3 font-head text-[12px] text-cloud">
+        {moving != null ? "CLICK ANOTHER CARD OR OPEN SPOT TO SWAP (ESC = CANCEL)" : draft.ids.some((x) => x != null) ? "YOUR ROSTER · CLICK A CARD, THEN ANOTHER, TO SWAP POSITIONS" : "YOUR ROSTER"}
+      </h2>
+      <Roster draft={draft} dex={dex} placing={call ? undefined : placing} onPlace={(s) => place(s)} spot={spot} onSpot={call ? undefined : chooseSpot} onStats={setStats} moving={moving} onMove={call ? undefined : move} />
       {stats && <PlayerModal p={stats} onClose={() => setStats(null)} />}
       {devMenu}
     </div>

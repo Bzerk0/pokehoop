@@ -61,7 +61,7 @@ export const SHORT_TEAM_HEIGHT = 35;
  *  SALARY_MAX at OVR_MAX (curve exponent SALARY_CURVE). All 8 salaries together must fit under SALARY_CAP. */
 export const SALARY_CAP = 100;
 export const SALARY_MIN = 1;
-export const SALARY_MAX = 40;
+export const SALARY_MAX = 34; // was 40: the playtesters found stars too dear (draft grades re-set to match)
 export const SALARY_CURVE = 3;
 
 /** The draft tiers (best position OVR, high to low). Each offer in a tier is drawn from the DRAFT_DEPTH best free,
@@ -80,6 +80,7 @@ export const ARCADE = {
   weights: { STAR: 1, STARTER: 3, ROLE: 6, SLEEPER: 5 },
   starChance: 0.9,
   firstStar: 1,
+  overChance: 0.25, // a pull's chance of one reel showing a STAR over your budget (locked: it can't be taken); 0 = never
   /** Contract prices (lineup.ts salary): each Pokémon's price is its rating's price ± up to `vary` (0.12 = 12%), a
    *  fixed tweak per Pokémon from `seed`. `perDraft` 1 = a new seed (new tweaks) at the start of every draft. */
   price: { vary: 0.12, perDraft: 0, seed: 0 },
@@ -90,17 +91,30 @@ export const DRAFT_REROLLS = 2;
 export const FULL = { teams: 8, classSize: 1.5, mean: 70, sd: 10, cpuNoise: 3 };
 export const DRAFT_DEPTH = 40;
 /** Unrounded team rating (chemistry included) needed for each draft grade, best first. Calibrated by simulating
- *  600 drafts per strategy with free placement: random picks on random spots land around 68.7 (D), always taking
- *  the best player around 70 (D), spending sensibly and placing well around 78.3 (B), and 79.5+ (A+) is that
- *  sensible drafter's top 10%. */
+ *  600 drafts per strategy with free placement (`npx tsx scripts/draft-calibrate.ts`): random picks on random spots land
+ *  around 71.5 (D), always taking the best player around 72 (D), spending sensibly and placing well around 78.7 (B),
+ *  and 81.8+ (A+) is that sensible drafter's top ~4%. (Re-set when SALARY_MAX went 40 -> 34: stars cost less, so every
+ *  grade moved up by 2.3.)
+ */
 export const DRAFT_GRADES: [string, number][] = [
-  ["A+", 79.5],
-  ["A", 78.5],
-  ["B", 77],
-  ["C", 73],
-  ["D", 68],
+  ["A+", 81.8],
+  ["A", 80.8],
+  ["B", 79.3],
+  ["C", 75.3],
+  ["D", 70.3],
   ["F", 0],
 ];
+
+/** The draft's verdict (season.ts): a finished draft plays an 82-game season against a fixed league of CPU teams
+ *  (`league`: how many teams of each difficulty, built once from `seed`, so every draft faces the same league) and is
+ *  judged by its record. Each opponent is met in turn until `games` are played. Grades by wins (`grades`). Calibrated
+ *  with scripts/draft-calibrate.ts: re-run it after changing the league, the cap, salaries, tiers or chemistry. */
+export const SEASON = {
+  games: 82,
+  league: { PRO: 12, "ALL-STAR": 14, CHAMPION: 3 } as Record<string, number>,
+  seed: 82_0,
+  grades: [["A+", 62], ["A", 56], ["B", 49], ["C", 40], ["D", 30], ["F", 0]] as [string, number][],
+};
 
 /** Chemistry (chemistry.ts): OVR points each player in a link gets. Links stack, up to CHEM_MAX per player,
  *  and a boosted OVR never passes ATTR_MAX. */
@@ -122,7 +136,7 @@ export const DIFFICULTIES = [
   { name: "ROOKIE", min: 55, max: 65, unlimitedOnly: false },
   { name: "PRO", min: 65, max: 75, unlimitedOnly: false },
   { name: "ALL-STAR", min: 75, max: 85, unlimitedOnly: false },
-  { name: "CHAMPION", min: 85, max: 95, unlimitedOnly: true },
+  { name: "CHAMPION", min: 85, max: 95, unlimitedOnly: false }, // (was Unlimited only; a Classic team just gets the best Classic pool has)
 ] as const;
 export const CPU_SAMPLE = 15;
 
@@ -170,7 +184,7 @@ export const SIM = {
   rim: 0.6,
   mid: 0.42,
   three: 0.35,
-  slope: 120,
+  slope: 132,
   block: 0.07,
   offRebound: 0.25,
   assist: 0.6,
@@ -180,11 +194,34 @@ export const SIM = {
   tiredFloor: 0.85, // ratings at zero energy, as a share of fresh
   quarterSec: 90, // 4 × 1:30, overtime 1:00
   overtimeSec: 60,
+  fitWeight: 1, // a starter out of position: share of his OVR drop there taken off every rating
+};
+
+/** First-type abilities in the live game. Fractional strengths are shares of the usual value. */
+export const ABILITY = {
+  scrappy: 0.15, // less on-court energy drain
+  heatCheck: 1, // fewer straight makes needed to catch fire
+  smooth: 0.15, // wider shot-meter green zone
+  rooted: 0.15, // farther rebound reach and less ground lost when boxing out
+  static: 0.1, // faster top speed while sprinting
+  iceCold: 0.1, // higher make chance late on either active clock
+  iceClock: 5, // seconds remaining at release, below which ICE COLD applies
+  brawler: 0.2, // less contest pressure on layups and dunks
+  toxicD: 0.15, // extra energy drain on the nearest opponent while defending
+  heavy: 0.2, // longer hold when a defender runs into a screen
+  foresight: 0.15, // higher chance to intercept a pass
+  quickHands: 0.15, // higher chance to strip the ball handler
+  sturdy: 0.15, // lower chance of being stripped
+  phase: 0.15, // higher ankle-breaker chance and longer stumble
+  sneak: 0.2, // farther reach on chase-down blocks
+  ironWall: 0.15, // higher chance to block a shot or swat an alley-oop
+  charm: 8, // fewer Finishing points a receiver needs for an alley-oop
 };
 
 /** The live arcade game (PLAN.md §10; Phase 5 is 1v1). Metres and seconds. The court runs up the screen and you
  *  always attack the top hoop. Each make/miss/steal/block is a dice roll when it happens, then animated. */
 export const LIVE = {
+  ab: ABILITY, // the live dev menu edits these same numbers in place
   // the court's size × a real one (28.65 × 15.24 m): lines, three-point arc and where players stand all scale with
   // it; the players don't, so a bigger court means more room. Trying 15% bigger (the user's test); 1 = real size
   courtScale: 1.15,
@@ -226,6 +263,7 @@ export const LIVE = {
   cineGap: 2, // game seconds after one live cut before the next can start
   cineHold: 0.5, // seconds a live dunk cut stays on after the dunker lands
   posterRange: 1.6, // metres: a dunk over a defender this close posterizes him (he turns into a trading card)
+  posterChance: 0.15, // ... but only this often (a rare treat, like the 360 and eastbay dunks)
   posterHold: 1.2, // extra game seconds a live dunk cut stays on for the card
   oopCut: 0.35, // seconds before the catch an alley-oop's live cut starts (the lob itself stays in the normal view)
   cornerEase: 1.4, // seconds a corner three's live cut takes to speed up from full slow-mo to normal
@@ -265,6 +303,7 @@ export const LIVE = {
   turboDrain: 0.45, // tank per second of turbo (tank is 0–1)
   turboRegen: 0.2,
   bump: 0.7, // players closer than this push apart
+  bumpHold: 0.85, // share of a bump the ball handler takes when he walks into a defender (0.5 = even)
   // shooting: hold K, release at the top of the meter
   meterTime: 0.75, // seconds to fill the meter to the top: the perfect release
   meterOver: 1.3, // held past this, the shot goes up late by itself
@@ -296,7 +335,12 @@ export const LIVE = {
   layupRange: 2.2, // metres from the rim: a quick tap this close is a layup (soft, off the glass, finishing-rated)
   layupBonus: 0.08, // make chance a layup adds over a plain shot at the rim
   oopRange: 3.4, // metres from the rim a receiver can be for a pass to become an alley-oop
-  oopFinishing: 60, // Finishing a receiver needs to catch and slam one
+  oopFinishing: 70, // Finishing a receiver needs to catch and slam one (was 60: a test of more skill needed)
+  oopPassing: 55, // ... and the passer needs this much Passing to throw the lob (test, same reason)
+  oopSwat: 0.3, // a defender who jumps up at the lob swats it away with this chance (+/- Interior D vs the receiver's Finishing)
+  softBlock: 0.12, // quick shots and floaters have no meter, so they're this much easier to block
+  euroGuard: 1.4, // metres: a defender still this close at the end of a eurostep can strip the ball
+  euroStrip: 0.15, // ... with this chance (+ Perimeter D over the ball handler's Handles, like a steal)
   ballCallRoom: 4.5, // metres of clear floor round a teammate before he calls BALL! BALL! (wide open only)
   oopPassMax: 12, // metres: a longer pass than this is never an alley-oop (no lobs from near full court)
   coachLearnAfter: 3, // CPU defence: defensive trips with a scheme before it judges it...
@@ -313,10 +357,19 @@ export const LIVE = {
   blockRange: 1.0, // hand to ball, across the floor
   blockWindow: 0.35, // seconds after release a shot can still be blocked
   blockBase: 0.35,
+  blockAssist: 0.2, // new-player help: the defender YOU steer gets this much more block chance ...
+  blockAssistRange: 0.4, // ... and this much more reach (m). Never the CPU's defenders, so your own shots aren't swatted more
   blockSlope: 0.006, // per point of the defender's Interior D over the shooter's rating
   // steals and crossovers
   stealRange: 1.4,
   stealBase: 0.22,
+  chemSlow: 0.3, // the tip-off runs at this speed while your chemistry shows
+  chemLead: 0.6, // s from the heading slamming in to the first link
+  chemGap: 0.45, // s between links slamming in
+  chemHold: 1.2, // s it all stays up after the last link
+  chemShow: 5, // most links shown
+  chemAttr: 1, // team games: attribute points (every attribute) a player gets per chemistry point (CHEM, up to CHEM_MAX)
+  tutorStealAid: 0.6, // HOW TO PLAY's STEAL step: added to your steal chance so a new player gets one fast
   stealSlope: 0.006, // per point of Perimeter D over Handles
   stealCool: 0.5,
   stumble: 0.55, // seconds frozen after a missed steal
@@ -345,6 +398,26 @@ export const LIVE = {
   floaterAi: 0.6, // CPU floaters per second driving at the rim 2.5–4.5 m out with a man close (× its style's drive)
   euroAi: 0.8, // CPU eurosteps per second driving inside eurostepRange with a man close (× its style's drive)
   eurostepRange: 5.5, // the crossover while driving this close to the rim is a eurostep
+  euroAcross: 0.9, // ...and only with the stick off to the side (|cos| of stick vs the line to the rim under this: 25°+ off)
+  // the back-down: the crossover near the rim, barely moving, into a man in front = a power dribble into him
+  backRange: 5.5, // m from the rim
+  backStill: 2.5, // m/s: slower than this counts as stationary (walking into him still counts)
+  backContact: 1.2, // m: pressed this close with the stick into him counts at any speed (you shove him along)
+  backReach: 2.2, // m: the man must be this close (and between you and the rim)
+  backTime: 0.5, // s of shouldering
+  backShove: 0.16, // s: the back-down's shove; then a win keeps carrying him (backCarry), a loss is planted
+  backPush: 6, // m/s during the shove (a win carries him back about backPush × backShove m)
+  backLoss: 0.3, // × backPush when walled off: he still budges a little
+  backCarry: 3, // m/s a won back-down keeps driving him back after the shove
+  backDunk: 0.8, // s after a won back-down when shoot alone dunks inside dunkRange (a press during it counts too)
+  backBase: 0.5, // win chance between equal players (postPower: strength, size, finishing vs interior D)
+  backSlope: 0.02, // win chance per point of post power you have over him
+  backMin: 0.1, // never less likely than this (nor more than 1 - this)
+  backSlow: 0.5, // s a beaten defender stays held up afterwards
+  backStall: 0.4, // s you're slowed when walled off
+  backAi: 1.2, // CPU back-downs per second while set up for one (stopped near the rim, its man in front)
+  backAiPost: 3, // the same during a POST UP play (its key player)
+  backAiMin: 0.6, // the CPU only tries one it wins at least this often (backDownChance)
   euroTime: 0.45, // seconds for its two plants
   euroPass: { from: 0.3, max: 0.8 }, // team games: a eurostep's finish is a pass instead, more likely the tighter the
   // contest (none below `from`, up to `max` when smothered)

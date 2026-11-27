@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { available, budgetOf, isDone, lineupOf, onClock, startFull, standings, totalPicks, YOU, youPick, type FullDraft } from "./fullDraft.ts";
+import { available, budgetOf, isDone, lineupOf, onClock, startFull, standings, swapYours, totalPicks, YOU, youPick, type FullDraft } from "./fullDraft.ts";
 import { dexOf, problems, salary, SLOTS, slotOvr } from "./lineup.ts";
 import { FULL } from "./ratingConfig.ts";
 import { rateAll } from "./ratings.ts";
@@ -44,6 +44,19 @@ describe("full draft", () => {
       for (let t = 0; t < FULL.teams; t++) expect(problems(lineupOf(fd, t), dex)).toEqual([]);
       expect(standings(fd, dex)).toHaveLength(FULL.teams);
     }
+  });
+
+  it("swapping two of your spots moves your picks with them and leaves the CPU teams alone", () => {
+    let fd = startFull(pool, dex, "classic", 11);
+    const p1 = available(fd, dex).find((p) => salary(p) <= budgetOf(fd, YOU, dex))!;
+    fd = youPick(fd, dex, p1.id, 1);
+    const before = fd.rosters.map((r) => [...r]);
+    const s = swapYours(fd, 1, 6);
+    expect(s.rosters[YOU][6]).toBe(p1.id);
+    expect(s.rosters[YOU][1]).toBeNull();
+    expect(s.picks.find((p) => p.id === p1.id)!.slot).toBe(6);
+    s.rosters.forEach((r, t) => t !== YOU && expect(r).toEqual(before[t]));
+    expect(swapYours(s, 1, 6).rosters).toEqual(before);
   });
 
   it("refuses a pick out of turn, already taken, or over your budget", () => {

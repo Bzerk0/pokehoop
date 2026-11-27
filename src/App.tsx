@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
+import { installArrowNav } from "./ui/arrowNav.ts";
 import { ErrorBoundary } from "./ui/components/ErrorBoundary.tsx";
 import { Footer } from "./ui/components/Footer.tsx";
 import { About } from "./ui/pages/About.tsx";
@@ -10,8 +12,10 @@ import { FranchisePage } from "./ui/pages/FranchisePage.tsx";
 import { PlayPage } from "./ui/pages/PlayPage.tsx";
 import { SharedTeam } from "./ui/pages/SharedTeam.tsx";
 import { Title } from "./ui/pages/Title.tsx";
+import { WhatsNew } from "./ui/pages/WhatsNew.tsx";
 
 export function App() {
+  useEffect(installArrowNav, []); // arrow keys move between buttons on every page and pop-up
   return (
     <BrowserRouter>
       <div className="flex h-full flex-col">
@@ -21,6 +25,7 @@ export function App() {
             <Route path="/" element={<Title />} />
             <Route path="/dex" element={<Dex />} />
             <Route path="/about" element={<About />} />
+            <Route path="/whats-new" element={<WhatsNew />} />
             <Route path="/franchise" element={<FranchisePage />} />
             <Route path="/build" element={<Builder />} />
             <Route path="/draft" element={<DraftPage />} />

@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import { makeAi, makeCoach, type AiLevel } from "../core/live/ai.ts";
 import {
-  callPlay, callScheme, COURT, dist, energyOf, facedTeammate, hoopOf, handlerOf, handZ, lineupGame, liveResult, meterWindow, NO_INPUT, reachOf, step, towardHoop,
+  callPlay, callScheme, COURT, dist, energyOf, facedTeammate, hoopOf, handlerOf, handZ, lineupGame, liveResult, meterWindow, NO_INPUT, oopFinishing, reachOf, step, towardHoop,
   subIn, type Game, type GameEvent, type Input, type Player,
 } from "../core/live/game.ts";
 import { PLAY, PLAYS, SCHEME_ABOUT, SCHEMES, type PlayName, type SchemeName } from "../core/live/plays.ts";
@@ -22,6 +22,7 @@ import { isSpecialDunk, cameraFor, ClipSpotter, frameAt, Recorder, replaySpeed, 
 import { Music } from "./music.ts";
 import { STEPS, Tutorial } from "./tutorial.ts";
 import { ACTIONS, codesFor, keyName, loadKeys, type Action, type KeyMap } from "./keys.ts";
+import { guide, ICONS, type IconName, type Move } from "./moveGuide.ts";
 import { inkOn, PALETTE, typeColor, type PaletteName } from "../ui/theme/palette.ts";
 
 export type LiveSetup = {
@@ -62,15 +63,24 @@ const DT = 1 / 60;
 /** The game-over moment (ms after the final buzzer): the beat before anyone reacts, the fall, the menu. */
 /** ms the newly controlled player flashes after a switch. */
 const SWITCH_FLASH = 1200;
+/** The Q menu's box on the HUD, and the height of one line's highlight (the mouse picks by these too). */
+const MENU_BOX = { x: 140, y: 60, w: 360 }, MENU_ROW = 14;
+/** Which Q menu line (0…n−1) a HUD point is on, or −1. */
+export function menuRow(p: { x: number; y: number }, n: number) {
+  const { x, y, w } = MENU_BOX, i = Math.floor((p.y - (y + 37)) / 16);
+  return p.x >= x + 8 && p.x < x + w - 8 && i >= 0 && i < n && p.y - (y + 37) - i * 16 < MENU_ROW ? i : -1;
+}
 const ENDING = { react: 900, fall: 250, menu: 4200 };
 const SPRITE_PX = 30; // sprite pixels per metre in the world
 const FONT = '"Press Start 2P"';
 const ATTRACT_BUDGET_MS = 4; // the title's off-screen fast-forward: ms of work per frame
-const POSTER_MS = 2400; // how long a posterized defender's card stays up (real time)
+const POSTER_MS = 2400;
+const CHECK_MS = 900; // the check-up bounce pass, there and back (real time) // how long a posterized defender's card stays up (real time)
 // the court's size, read again for each new game (the dev menu can change it)
 let W = COURT.w, L = COURT.l;
 
 /** court (x across, y up the court, z height) → Three.js (X right, Y up, Z toward the camera at your end) */
+const BARRIER_MS = 320; // how long the contact barrier shows
 const at = (x: number, y: number, z = 0) => new THREE.Vector3(x - W / 2, z, L / 2 - y);
 const col = (n: PaletteName) => new THREE.Color(PALETTE[n]);
 const basic = (n: PaletteName, extra: THREE.MeshBasicMaterialParameters = {}) => new THREE.MeshBasicMaterial({ color: col(n), ...extra });
@@ -111,6 +121,15 @@ export class LiveView {
   private extraEvents: GameEvent[] = []; // events made between game steps (menu calls), for this frame
   /** The Q menu: your play (with the ball) or your defence (without), and the highlighted line. */
   private menu: { kind: "play" | "scheme"; cursor: number } | null = null;
+  /** The mouse over the HUD, in HUD pixels, for the Q menu: hover moves its cursor, a click picks. */
+  private mouse = { x: 0, y: 0, moved: false, clicked: false };
+  private onMouse = (e: MouseEvent) => {
+    const r = this.hud.canvas.getBoundingClientRect();
+    this.mouse.x = ((e.clientX - r.left) * VIEW_W) / r.width;
+    this.mouse.y = ((e.clientY - r.top) * VIEW_H) / r.height;
+    this.mouse.moved = true;
+    if (e.type === "mousedown") this.mouse.clicked = true;
+  };
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(52, VIEW_W / VIEW_H, 0.1, 300);
@@ -166,6 +185,7 @@ export class LiveView {
   private hype = 0;
   private holdFromStart = false; // K/Space still held from the press that tipped off
   private checkWait: { side: number; at: number } | null = null;
+  private checkAnim: { at: number; from: number; to: number } | null = null; // the check-up: a bounce pass there and back
   private poster: { who: number; by: number; at: number; from: { x: number; y: number } } | null = null; // posterized! // streetball: waiting for you to check it up
   private staminaUntil = 0; // show the stamina bar until then (ms)
   private crowd: number;
@@ -198,6 +218,7 @@ export class LiveView {
   private attractSkips = 0;
   private lastActs: string[] = [];
   private cineCaption: { text: string; color: PaletteName; at: number } | null = null; // BIG BLOCK! over a live cinematic
+  private chemIntro: { at: number; lines: string[] } | null = null; // your team's chemistry, slammed in at tip-off (slow-mo meanwhile)
   private ticks = { shot: 99, clock: 99 }; // the last second each clock ticked on (the countdown beeps)
   private cineBlocked = false; // the live slam got stuffed
   private lastCineAt = -Infinity; // game time the last live cut ended (LIVE.cineGap)
@@ -211,6 +232,8 @@ export class LiveView {
   private ghosts: THREE.Sprite[] = []; // afterimages trailing the star of a replay
   private impact!: THREE.Mesh; // a shockwave ring at the moment of impact
   private impactAt: { x: number; y: number; z: number; t: number } | null = null;
+  private barrier!: THREE.Mesh; // a white barrier flashing up between two players on contact (a back-down shove, a screen)
+  private barrierAt: { x: number; y: number; ang: number; t: number; who: number } | null = null;
   private dust: THREE.Sprite[] = [];
   private dustAt: { x: number; y: number; t: number } | null = null;
   private baseScale: [number, number][] = []; // each sprite's size (replays squash and stretch the star)
@@ -257,6 +280,8 @@ export class LiveView {
       window.addEventListener("keyup", this.onUp);
       window.addEventListener("blur", this.onBlur);
       document.addEventListener("visibilitychange", this.onVisibility);
+      hud.addEventListener("mousemove", this.onMouse);
+      hud.addEventListener("mousedown", this.onMouse);
     }
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -291,6 +316,10 @@ export class LiveView {
   get nearRim() {
     const g = this.g, me = g.players[g.control];
     return this.started && !this.ended && g.ball.holder === me.i && !g.ball.flight && dist(me, hoopOf(me.side)) < LIVE.dunkRange;
+  }
+  /** True while the intro card (the keys, TIP OFF) is up. */
+  get onIntro() {
+    return !this.started && !this.tutor && !this.d.attract;
   }
   get canSimRest() {
     return canSimRest(this.g);
@@ -337,6 +366,8 @@ export class LiveView {
     window.removeEventListener("keydown", this.onDown);
     window.removeEventListener("keyup", this.onUp);
     window.removeEventListener("blur", this.onBlur);
+    this.hud.canvas.removeEventListener("mousemove", this.onMouse);
+    this.hud.canvas.removeEventListener("mousedown", this.onMouse);
     for (const x of this.disposables) x.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
@@ -370,6 +401,7 @@ export class LiveView {
   private onUp = (e: KeyboardEvent) => this.held.delete(e.code);
   private lastSprint = 0;
   private doubleTapped = false;
+  private heldTap: Pick<Input, "steal" | "cross" | "passTo"> = { steal: false, cross: false, passTo: null };
   private onBlur = () => this.held.clear();
   /** A hidden tab freezes the game (and starves the music's timer), so the music waits too. */
   private onVisibility = () => {
@@ -562,6 +594,10 @@ export class LiveView {
     this.impact.rotation.x = -Math.PI / 2;
     this.impact.visible = false;
     s.add(this.impact);
+    // the contact barrier: a solid see-through white oval, standing up between them
+    this.barrier = new THREE.Mesh(this.keep(new THREE.CircleGeometry(0.5, 24).scale(0.7, 1, 1).translate(0, 0.5, 0) /* 1 tall, feet at 0: scaled to the mover */), this.keep(basic("white", { transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide })));
+    this.barrier.visible = false;
+    s.add(this.barrier);
     const puff = this.keep(pixelTexture(paint(4, 4, (px) => (px(1, 0, "cream", 2, 4), px(0, 1, "cream", 4, 2)))));
     for (let k = 0; k < 8; k++) {
       const d = new THREE.Sprite(this.keep(new THREE.SpriteMaterial({ map: puff, transparent: true, depthWrite: false, color: col("tan") })));
@@ -839,9 +875,12 @@ export class LiveView {
         this.holdFromStart = true; // the key that tipped off isn't a shot
         blip(990, 90);
         this.music.start();
+        const links = this.tutor ? [] : this.g.chem[0];
+        if (links.length) this.chemIntro = { at: now, lines: links.slice(0, LIVE.chemShow).map((k) => `${k.name} +${k.boost}`) };
       }
     } else if (!this.ended) {
       this.menuKeys();
+      this.mouse.moved = this.mouse.clicked = false;
       if (this.holdFromStart && !this.act("shoot")) this.holdFromStart = false;
       const steering = this.g.players[this.g.control], tankBefore = steering.turbo;
       // 1–5 pass straight to that spot in your lineup (your players come first in g.players)
@@ -851,30 +890,37 @@ export class LiveView {
         y: (this.act("up") ? 1 : 0) - (this.act("down") ? 1 : 0),
         turbo: this.act("turbo"),
         shoot: this.act("shoot") && !this.holdFromStart,
-        steal: this.tap("pass"),
-        cross: this.doubleTapped, // a double tap of sprint: the crossover with the ball, a steal without
-        passTo: digit != null && digit <= this.g.size ? digit - 1 : null,
+        steal: this.tap("pass") || this.heldTap.steal,
+        cross: this.doubleTapped || this.heldTap.cross, // a double tap of sprint: the crossover with the ball, a steal without
+        passTo: digit != null && digit <= this.g.size ? digit - 1 : this.heldTap.passTo,
         screen: this.act("left") && this.act("right"), // hold left and right together: plant a screen
       };
       if (this.checkWait) {
         // streetball: the game waits at the top of the key until you check it up (shoot or pass)
         if (!this.holdFromStart && (this.tap("shoot") || this.tap("pass"))) {
           this.checkWait = null;
-          this.holdFromStart = true; // that press isn't a shot
+          this.holdFromStart = true; // that press isn't a shot...
+          mine.shoot = mine.steal = false; // ...nor a jump or a pass this frame (it was read before the check)
+          const from = this.g.ball.holder ?? 0;
+          this.checkBounces = 0;
+          this.checkAnim = { at: now, from, to: this.g.players.find((p) => p.side !== this.g.players[from].side)?.i ?? from };
           blip(880, 60, 0.05);
         } else this.acc = 0;
       }
       // slower in the menu, and at a live slam; stopped while waiting for the check
-      if (!this.checkWait) this.acc += dt * (this.menu ? LIVE.menuSlow : 1) * (this.cine ? replaySpeed(this.cine.clip, this.g.time) : 1);
+      if (this.checkAnim && now - this.checkAnim.at > CHECK_MS) this.checkAnim = null; // checked: play on
+      if (this.chemIntro && now - this.chemIntro.at > this.chemMs(this.chemIntro)) this.chemIntro = null;
+      const chemSlow = this.chemIntro ? LIVE.chemSlow : 1; // the tip-off plays in slow-mo under the chemistry
+      if (!this.checkWait && !this.checkAnim) this.acc += dt * chemSlow * (this.menu ? LIVE.menuSlow : 1) * (this.cine ? replaySpeed(this.cine.clip, this.g.time) : 1);
       let first = true;
       const frameEvents: GameEvent[] = this.extraEvents.splice(0); // anything from between steps (a menu call)
-      // in the tutorial the CPU stands still (and has no coach) except in the defence step
-      const cpuIdle = this.tutor != null && !this.tutor.cpuPlays;
+      // in the tutorial the CPU stands still (and has no coach), except in the steal step: there their handler walks it up
+      const tutor = this.tutor, cpuIdle = tutor != null && !tutor.cpuPlays, easy = tutor != null && tutor.cpuPlays && tutor.easy;
       while (this.acc >= DT) {
         this.acc -= DT;
         const yours = first ? mine : { ...mine, steal: false, cross: false, passTo: null }; // a tap counts once
         const g = this.g;
-        step(g, g.players.map((p) => (p.i === g.control ? yours : cpuIdle && p.side === 1 ? NO_INPUT : this.brains[p.i]?.(g, DT) ?? NO_INPUT)), DT);
+        step(g, g.players.map((p) => (p.i === g.control ? yours : cpuIdle && p.side === 1 ? NO_INPUT : easy && p.side === 1 ? tutor.cpuInput(g, p) : this.brains[p.i]?.(g, DT) ?? NO_INPUT)), DT);
         if (!this.tutor) this.coach(g); // after the step, so its calls land in this step's events
         if (!this.tutor) {
           // film it, and watch for big plays to replay
@@ -894,7 +940,10 @@ export class LiveView {
         // the soundtrack follows the ball: the game song with it, the tense defence song without
         if (g.ball.holder != null) this.music.setSong(g.players[g.ball.holder].side === 0 ? "game" : "defence");
         if (g.over) break;
+        if (this.checkWait) break; // streetball: everything stops at the check, right now
       }
+      // a fast screen can draw a frame with no game step: keep its taps for the next one, or a J press is lost
+      this.heldTap = first && !this.menu ? { steal: mine.steal, cross: mine.cross, passTo: mine.passTo } : { steal: false, cross: false, passTo: null };
       if (!this.tutor) this.checkClips();
       this.countdown();
       if (steering.turbo < tankBefore) this.staminaUntil = now + 1000; // turbo in use: show the bar
@@ -978,7 +1027,10 @@ export class LiveView {
     if (this.tap("down")) (m.cursor = (m.cursor + 1) % options.length), blip(660, 30);
     const digit = [1, 2, 3, 4, 5].find((n) => tap(`Digit${n}`) && n <= options.length);
     if (digit) m.cursor = digit - 1;
-    if (digit || tap("Enter") || this.tap("shoot")) {
+    // the mouse: hover a line to point at it, click it to call it
+    const row = this.mouse.moved || this.mouse.clicked ? menuRow(this.mouse, options.length) : -1;
+    if (row >= 0 && row !== m.cursor) (m.cursor = row), blip(660, 30);
+    if (digit || tap("Enter") || this.tap("shoot") || (this.mouse.clicked && row >= 0)) {
       const pick = options[m.cursor], before = g.events.length;
       if (m.kind === "play") callPlay(g, 0, pick as PlayName | null);
       else callScheme(g, 0, pick as SchemeName);
@@ -1039,6 +1091,14 @@ export class LiveView {
         blip(1175, 80);
         pop(e.text);
         break;
+      case "post": {
+        // a back-down's shove: a thud, a nudge of the camera and a white barrier where they meet (no caption)
+        const a = e.who != null ? this.g.players[e.who] : null, b = e.vs != null ? this.g.players[e.vs] : null;
+        if (a && b) this.wall(a, b, now);
+        this.shake = Math.max(this.shake, 0.06);
+        blip(110, 70, 0.07);
+        break;
+      }
       case "move": // a step-back, a eurostep, an oop, a special dunk: a little call over the player
         if (e.text === "ALLEY-OOP!") sting(jingle.oop());
         else if (e.text === "EUROSTEP") sting(jingle.flourish());
@@ -1070,10 +1130,13 @@ export class LiveView {
         if (mine && to != null && !this.g.solo) (this.whiteWho = to), (this.whiteUntil = now + 140);
         break;
       }
-      case "screen":
+      case "screen": {
+        const a = e.who != null ? this.g.players[e.who] : null, b = e.vs != null ? this.g.players[e.vs] : null;
+        if (a && b) this.wall(a, b, now); // the barrier where he runs into the screener
         blip(300, 40, 0.04);
         this.popups.push({ text: "SCREEN!", color: mine ? "gold" : "red", until: now + 600, who: undefined, big: false, banner: true });
         break;
+      }
       case "fire":
         // a rising arpeggio, a shake, the crowd on its feet
         sting(jingle.fire());
@@ -1086,7 +1149,10 @@ export class LiveView {
         break;
       case "check":
         // streetball 1v1: a check at the top; hold the game till you check it up
-        if (this.g.half && this.g.size === 1 && !this.d.attract) this.checkWait = { side: e.side, at: now };
+        if (this.g.half && this.g.size === 1 && !this.d.attract) {
+          this.checkWait = { side: e.side, at: now };
+          if (this.cine) this.endCine(); // a live cut runs on the game clock, which stops here: it would hang
+        }
         break;
       case "sub":
         blip(523, 30, 0.03);
@@ -1216,6 +1282,7 @@ export class LiveView {
     }
     let by = b.y;
     if (this.cinematic && b.holder != null && !b.flight) [bx, by, bz] = this.specialBall(g.players[b.holder], bx, by, bz);
+    if (this.checkAnim) [bx, by, bz] = this.checkBallAt(now);
     this.ball.position.copy(at(bx, by, bz + 0.22));
     this.drawBallFire(bx, by, bz + 0.22, now);
     this.ballShadow.position.copy(at(bx, b.y, 0.025));
@@ -1231,7 +1298,36 @@ export class LiveView {
     else if (this.replay) this.drawReplayHud(now);
     else if (this.cine) this.drawCineHud();
     else this.drawHud(now);
+    if (this.chemIntro && !this.replay && !this.d.attract) this.drawChem(this.chemIntro, now);
   }
+
+  /** How long the chemistry intro stays up: the heading, each link LIVE.chemGap apart, then a hold. */
+  private chemMs(ci: { lines: string[] }) {
+    return (LIVE.chemLead + ci.lines.length * LIVE.chemGap + LIVE.chemHold) * 1000;
+  }
+
+  /** CHEMISTRY (or CHEMISTRIES) slams in big, then each link slams in under it, one at a time; it all fades at the end. */
+  private drawChem(ci: { at: number; lines: string[] }, now: number) {
+    const c = this.hud, t = now - ci.at, out = this.chemMs(ci) - t;
+    if (out < 160 && Math.floor(out / 40) % 2 === 0) return; // a stepped blink out (no fades in pixel style)
+    const slam = (text: string, since: number, y: number, size: number, color: PaletteName) => {
+      if (since < 0) return;
+      const big = since < 90 ? size * 2 : since < 160 ? Math.round(size * 1.5) : size; // in big, then two steps down
+      c.font = `${big}px ${FONT}`;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillStyle = PALETTE.black;
+      for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2], [3, 3]]) c.fillText(text, VIEW_W / 2 + dx, y + dy);
+      c.fillStyle = PALETTE[since < 90 ? "white" : color];
+      c.fillText(text, VIEW_W / 2, y);
+      if (since < 30) this.shake = Math.max(this.shake, 0.08);
+    };
+    slam(ci.lines.length > 1 ? "CHEMISTRIES" : "CHEMISTRY", t, 92, 24, "gold");
+    ci.lines.forEach((line, i) => slam(line, t - (LIVE.chemLead + i * LIVE.chemGap) * 1000, 130 + i * 22, 12, "lime"));
+    const k = Math.floor((t - LIVE.chemLead * 1000) / (LIVE.chemGap * 1000)); // a thump as each link lands
+    if (k >= 0 && k < ci.lines.length && k !== this.chemThump) (this.chemThump = k), blip(330 + k * 110, 70, 0.06);
+  }
+  private chemThump = -1;
 
   // ── replays (replay.ts has the recording, the spotting and the camera scripts) ─────────────────────────────
   /** Clips that have finished filming join the top plays; the biggest gets an instant replay at the next stoppage. */
@@ -1439,6 +1535,8 @@ export class LiveView {
           if (c.clip.kind === "stepback") this.shout(["SPLASH!", "CASH!", "BANG!"], side, now); // the corner three
           if (c.clip.kind === "eurostep" || c.clip.kind === "floater") this.shout(["AND IT'S GOOD!", "SO SMOOTH!", "BUCKETS!"], side, now);
         }
+        // a dish out of the eurostep: straight back to the play camera to follow the pass
+        if (c.clip.kind === "eurostep" && e.text === "DISH!" && e.who === c.clip.who) c.clip.end = Math.min(c.clip.end, g.time);
         if (e.kind === "block" && e.vs === c.clip.who && e.who != null) {
           // stuffed! hold the shot a beat longer and shout about it; the slow motion moves to the block
           this.bigBlock(e.who, now);
@@ -1516,6 +1614,11 @@ export class LiveView {
       }
     }
     this.lastActs = g.players.map((p) => p.act);
+  }
+
+  /** The contact barrier between two players, flat across the line from one to the other. */
+  private wall(a: { x: number; y: number; i: number }, b: { x: number; y: number }, now: number) {
+    this.barrierAt = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, ang: Math.atan2(b.x - a.x, -(b.y - a.y)), t: now, who: a.i };
   }
 
   /** A three let go from one of the corners (the straight bit of the line, beside the baseline). */
@@ -1707,6 +1810,15 @@ export class LiveView {
       this.impact.scale.setScalar(1 + iw * 6);
       (this.impact.material as THREE.MeshBasicMaterial).opacity = 1 - iw;
     }
+    // the barrier: pops up wide in two steps, holds, blinks out (BARRIER_MS)
+    const bt = this.barrierAt ? now - this.barrierAt.t : Infinity;
+    this.barrier.visible = bt < BARRIER_MS && !(bt > BARRIER_MS - 120 && Math.floor(bt / 40) % 2 === 0);
+    if (this.barrierAt && bt < BARRIER_MS) {
+      this.barrier.position.copy(at(this.barrierAt.x, this.barrierAt.y, 0));
+      this.barrier.rotation.set(0, this.barrierAt.ang, 0);
+      const h = (this.bodies[this.barrierAt.who]?.scale.y ?? 1.4) * 0.9; // 90% of the height of the Pokémon doing the move
+      this.barrier.scale.set(h * (bt < 40 ? 0.5 : bt < 80 ? 0.8 : 1), h * (bt < 40 ? 1.15 : 1), 1);
+    }
     const dw = this.dustAt ? (now - this.dustAt.t) / 550 : 1;
     this.dust.forEach((d, k) => {
       d.visible = dw < 1;
@@ -1797,7 +1909,7 @@ export class LiveView {
       const d = Math.hypot(q.x - star.x, q.y - star.y);
       if (q.side !== star.side && d < best) (who = i), (best = d);
     });
-    if (who < 0) return;
+    if (who < 0 || Math.random() >= LIVE.posterChance) return; // (looks only: not the seeded game rng)
     const q = this.g.players[who];
     this.poster = { who, by, at: now, from: this.toScreen(q.x, q.y, q.z + 1) };
     this.cineCaption = null; // the card says it
@@ -2055,7 +2167,7 @@ export class LiveView {
     const g = this.g, you = g.players[g.control], hoop = hoopOf(pl.side), dh = dist(pl, hoop);
     const room = Math.min(...g.players.filter((d) => d.side !== pl.side).map((d) => dist(d, pl)));
     if (room < LIVE.ballCallRoom) return 0; // only when wide open
-    const oop = dh < LIVE.oopRange && pl.p.attrs.finishing >= LIVE.oopFinishing && dist(you, pl) < LIVE.oopPassMax;
+    const oop = dh < LIVE.oopRange && pl.p.attrs.finishing >= oopFinishing(you) && you.p.attrs.passing >= LIVE.oopPassing && dist(you, pl) < LIVE.oopPassMax;
     const three = dh >= COURT.three && pl.p.attrs.shooting >= 60;
     const cut = towardHoop(pl) > 2.5 && dh < 6;
     return oop || three || cut ? room : 0;
@@ -2075,6 +2187,16 @@ export class LiveView {
     }
     return (this.ballCaller = best);
   }
+
+  /** The check-up: a bounce pass to the defender and straight back (CHECK_MS), with a slap of the ball on each bounce. */
+  private checkBallAt(now: number): [number, number, number] {
+    const a = this.checkAnim!, t = Math.min(1, (now - a.at) / CHECK_MS), p = this.g.players[a.from], q = this.g.players[a.to];
+    const there = t < 0.5, u = there ? t * 2 : (t - 0.5) * 2, k = there ? u : 1 - u; // 0 at the checker, 1 at the defender
+    const bounce = Math.abs(1 - 2 * u); // down to the floor halfway along each leg
+    if (this.checkBounces < (t >= 0.25 ? 1 : 0) + (t >= 0.75 ? 1 : 0)) (this.checkBounces++, blip(300, 40, 0.06));
+    return [p.x + (q.x - p.x) * k, p.y + (q.y - p.y) * k, 0.05 + bounce * 1.0];
+  }
+  private checkBounces = 0;
 
   /** Streetball: CHECK UP! slams in big, with the key to press under it (yours to start, or to hand it to them). */
   private drawCheckUp(text: (s: string, x: number, y: number, n: PaletteName, size?: number, align?: CanvasTextAlign, shadow?: boolean) => void, now: number) {
@@ -2129,7 +2251,7 @@ export class LiveView {
     const m = this.menu!, g = this.g;
     const options: (PlayName | SchemeName | null)[] = m.kind === "play" ? [...PLAYS, null] : [...SCHEMES];
     const current = m.kind === "play" ? g.calls[0].play : g.calls[0].scheme;
-    const x = 140, y = 60, w = 360, h = 40 + options.length * 16 + 40;
+    const { x, y, w } = MENU_BOX, h = 40 + options.length * 16 + 40;
     // see-through, so you can still watch the (slowed) play behind it
     const c = this.hud;
     c.globalAlpha = 0.45;
@@ -2140,14 +2262,14 @@ export class LiveView {
     text("(GAME SLOWED)", x + w / 2, y + 22, "steel", 8, "center");
     options.forEach((o, i) => {
       const yy = y + 40 + i * 16, on = i === m.cursor;
-      if (on) rect(x + 8, yy - 3, w - 16, 14, "navy");
+      if (on) rect(x + 8, yy - 3, w - 16, MENU_ROW, "navy");
       text(`${on ? ">" : " "} ${i + 1} ${o ?? "FREE PLAY"}${o === current ? " *" : ""}`, x + 14, yy, on ? "white" : "cloud");
     });
     const pick = options[m.cursor];
     const about = m.kind === "play" ? (pick ? PLAY[pick as PlayName].about : "NO PLAY: EVERYONE SPACES OUT") : SCHEME_ABOUT[pick as SchemeName];
     const ay = y + 40 + options.length * 16 + 6;
     text(about.slice(0, 43), x + w / 2, ay, "lime", 8, "center");
-    text(`UP/DOWN + ENTER, OR 1-5. ${keyName(this.keys.plays)} CLOSES`, x + w / 2, ay + 14, "steel", 8, "center");
+    text(`UP/DOWN + ENTER, 1-5 OR CLICK. ${keyName(this.keys.plays)} CLOSES`, x + w / 2, ay + 14, "steel", 8, "center");
   }
 
   /** Faint key icons along the bottom, for what you can do right now; a key lights up while it's held. */
@@ -2223,29 +2345,8 @@ export class LiveView {
     rect(cx - rw / 2, 86, rw, 16, "red");
     text(sub, cx, 90, "white", 8, "center");
     // your own keys (the CONTROLS screen in the pause menu changes them), as pixel key caps in two columns
-    const n = (a: Action) => keyName(this.keys[a]);
-    const team = g.size > 1, move = `${n("up")}${n("left")}${n("down")}${n("right")}`, shoot = `${n("shoot")}/SPC`;
-    const offence: [string, string][] = [
-      [move, "MOVE (OR ARROWS)"],
-      [`${n("turbo")}/SHIFT`, "SPRINT"],
-      [shoot, "HOLD, LET GO: SHOOT"],
-      [`${n("turbo")}+${n("shoot")}`, "DUNK AT THE RIM"],
-      ...(team ? ([[n("pass"), "PASS"], ["1-5", "PASS TO A SLOT"], [n("plays"), "CALL A PLAY"], [`${n("left")}+${n("right")}`, "HOLD: SET A SCREEN"]] as [string, string][]) : []),
-      [doubleCap(n("turbo")), "CROSSOVER (DOUBLE-TAP)"],
-    ];
-    const defence: [string, string][] = [
-      [shoot, "JUMP / BLOCK"],
-      [doubleCap(n("turbo")), "STEAL (DOUBLE-TAP)"],
-      ...(team ? ([[n("pass"), "SWITCH PLAYER"], [n("plays"), "PICK A DEFENCE"]] as [string, string][]) : []),
-    ];
-    const game: [string, string][] = [[n("music"), "MUSIC"], ["ESC", "PAUSE"]];
-    if (this.touch) {
-      // on a phone: the on-screen buttons
-      offence.splice(0, offence.length, ["STICK", "MOVE"], ["TURBO", "SPRINT (HOLD)"], ["SHOOT", "HOLD, LET GO: SHOOT"], ["TURBO+SHOOT", "DUNK AT THE RIM"],
-        ...(team ? ([["PASS", "PASS"], ["PLAYS", "CALL A PLAY"], ["SCREEN", "HOLD: SET A SCREEN"]] as [string, string][]) : []), ["TURBOx2", "CROSSOVER (DOUBLE-TAP)"]);
-      defence.splice(0, defence.length, ["SHOOT", "JUMP / BLOCK"], ["TURBOx2", "STEAL (DOUBLE-TAP)"], ...(team ? ([["PASS", "SWITCH PLAYER"], ["PLAYS", "PICK A DEFENCE"]] as [string, string][]) : []));
-      game.splice(0, game.length, ["II", "PAUSE"]);
-    }
+    const team = g.size > 1, gd = guide(this.keys, team, this.touch);
+    const offence = gd.offence.slice(0, 9), defence = gd.defence, game = gd.game; // (the rest is on the pause menu's CONTROLS)
     const cap = (k: string, x: number, y: number, lit = false) => {
       const w = k.length * 8 + 8;
       rect(x, y, w, 15, lit ? "gold" : "white");
@@ -2253,13 +2354,16 @@ export class LiveView {
       text(k, x + 4, y + 4, lit ? "gold" : "white");
       return w;
     };
-    const column = (title: string, list: [string, string][], x: number, y: number) => {
+    const icon = (name: IconName, x: number, y: number) =>
+      ICONS[name].forEach((row, j) => [...row].forEach((ch, i) => ch === "#" && rect(x + i, y + j, 1, 1, "gold")));
+    const column = (title: string, list: Move[], x: number, y: number) => {
       text(title, x, y, "gold");
       rect(x, y + 11, 250, 1, "slate");
       const gap = list.length > 8 ? 17 : 19; // a long list (team games' offence) sits a little tighter, clear of TIP OFF
-      list.forEach(([k, label], i) => {
-        const w = cap(k, x, y + 18 + i * gap);
-        text(label, x + w + 8, y + 22 + i * gap, "cloud");
+      list.forEach((m, i) => {
+        icon(m.icon, x, y + 21 + i * gap);
+        const w = cap(m.key, x + 12, y + 18 + i * gap);
+        text(m.short, x + 12 + w + 8, y + 22 + i * gap, "cloud");
       });
     };
     column("OFFENCE", offence, 58, 114);

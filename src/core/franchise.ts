@@ -274,6 +274,13 @@ export function finishSlate(f: Franchise, dex: Dex): Franchise {
   for (const { key, game } of slate(f)) if (!game.score) f = simWith(f, ld, key);
   return moveOn(f, dex);
 }
+/** The day after YOUR game: sim the rest of the slate (not your own games) and move on. Unlike finishSlate, a lone live
+ *  series (the finals) isn't played on into your next game, since its "next game" is on the slate the moment yours is in. */
+export function finishDay(f: Franchise, dex: Dex): Franchise {
+  const ld = leagueDex(dex, f);
+  for (const { key, game } of slate(f)) if (!game.score && game.home !== YOU && game.away !== YOU) f = simWith(f, ld, key);
+  return moveOn(f, dex);
+}
 /** Sim on to the end of the regular season (or of the playoffs). */
 export function simPhase(f: Franchise, dex: Dex): Franchise {
   const phase = f.phase;

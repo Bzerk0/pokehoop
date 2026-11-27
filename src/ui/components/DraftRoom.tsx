@@ -40,7 +40,7 @@ export function useTicker(total: number, mine: (i: number) => boolean) {
  */
 export function DraftRoom({
   kicker, status, urgent, order, boardTitle = "THE BOARD", budget, board, yourTurn, picksTitle = "THE PICKS", picks, picksEmpty,
-  slots, rate, canPlace, bestSlot, onPlace, actions, children,
+  slots, rate, canPlace, bestSlot, onPlace, onSwap, actions, children,
 }: {
   kicker: string; // the small line: ROUND 1 OF 8 · PICK 3 · CLASSIC
   status: string; // the big line: who's picking
@@ -58,13 +58,22 @@ export function DraftRoom({
   canPlace: (slot: number, p: RatedPokemon) => boolean;
   bestSlot: (p: RatedPokemon) => number | null; // where Enter puts him
   onPlace: (id: number, slot: number) => void;
+  onSwap?: (a: number, b: number) => void; // click two roster cards (or a card and an open spot) to swap their positions
   actions?: ReactNode; // buttons in the status bar (PASS, AUTO-FILL…)
   children?: ReactNode; // under the roster (chemistry)
 }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [stats, setStats] = useState<RatedPokemon | null>(null);
+  const [moving, setMoving] = useState<number | null>(null);
   const sel = (yourTurn && board.find((c) => c.p.id === selected)?.p) || null;
 
+  const swapClick = (slot: number) => {
+    if (!onSwap) return;
+    moveBlip();
+    if (moving == null) return setMoving(slot);
+    if (moving !== slot) onSwap(moving, slot);
+    setMoving(null);
+  };
   const place = (slot: number) => {
     if (!sel || !canPlace(slot, sel)) return;
     selectBlip();
@@ -76,6 +85,7 @@ export function DraftRoom({
   }, [urgent, picks.length]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && moving != null) return void (e.stopImmediatePropagation(), setMoving(null));
       if (!sel) return;
       if (e.key === "Enter") {
         const slot = bestSlot(sel);
@@ -161,17 +171,19 @@ export function DraftRoom({
       {/* your roster: with a Pokémon chosen, the spots it can go show how it'd rate there */}
       <section>
         <h2 className="m-0 mb-2 font-head text-[16px] text-cloud">
-          {sel ? `PLACE ${sel.name.toUpperCase()}: CLICK A SPOT${bestSlot(sel) != null ? " (ENTER = BEST FIT)" : ""}` : "YOUR ROSTER"}
+          {sel ? `PLACE ${sel.name.toUpperCase()}: CLICK A SPOT${bestSlot(sel) != null ? " (ENTER = BEST FIT)" : ""}` : moving != null ? "CLICK ANOTHER CARD OR OPEN SPOT TO SWAP (ESC = CANCEL)" : onSwap && slots.some((x) => x.p) ? "YOUR ROSTER · CLICK A CARD, THEN ANOTHER, TO SWAP POSITIONS" : "YOUR ROSTER"}
         </h2>
         <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
           {slots.map((slot, s) => {
             const can = !!sel && canPlace(s, sel);
+            const swap = !sel && !!onSwap && (slot.p != null || moving != null); // a filled card to pick up, or somewhere to put it down
             return (
+              <div key={s} className="relative flex min-w-0">
               <button
-                key={s}
-                className={`flex min-w-0 flex-col items-center border-4 bg-night p-1 ${can ? (slot.p ? "border-red" : "border-gold") : "border-slate"}`}
-                disabled={!can}
-                onClick={() => place(s)}
+                className={`flex w-full min-w-0 flex-col items-center border-4 p-1 ${moving === s ? "border-gold bg-navy" : `bg-night ${can ? (slot.p ? "border-red" : "border-gold") : swap && moving != null ? "border-white" : "border-slate"}`}`}
+                disabled={!can && !swap}
+                aria-pressed={swap ? moving === s : undefined}
+                onClick={() => (can ? place(s) : swapClick(s))}
               >
                 <span className="text-[18px] text-cloud">{slot.label}</span>
                 <span className="relative flex h-[56px] w-full items-end justify-center">
@@ -185,6 +197,8 @@ export function DraftRoom({
                 <span className={`w-full truncate text-center text-[16px] ${can && slot.p ? "text-red" : "text-white"}`}>{can && slot.p ? "REPLACE" : (slot.p?.name ?? "")}</span>
                 {slot.sub != null && <span className="h-[16px] w-full truncate text-center text-[16px] leading-[16px] text-cloud">{slot.sub}</span>}
               </button>
+              {slot.p && <StatsButton p={slot.p} onOpen={() => setStats(slot.p)} className="absolute -bottom-[8px] -right-[8px]" />}
+              </div>
             );
           })}
         </div>
